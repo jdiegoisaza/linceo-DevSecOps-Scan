@@ -1,6 +1,6 @@
 {
     "$schema": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
-    "id": "13120177-3a31-4d13-ac0f-09687b7e557c",
+    "id": "d9ae0c90-1ccf-45c5-b40f-ac24c64e0bc4",
     "name": "linceo-scan",
     "instanceNameFormat": "linceo scan: $(category)",
     "friendlyName": "linceo scan",
