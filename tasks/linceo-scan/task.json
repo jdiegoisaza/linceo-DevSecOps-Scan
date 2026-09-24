@@ -10,7 +10,7 @@
     "author": "your-publisher",
     "version": {
         "Major": 0,
-        "Minor": 1,
+        "Minor": 2,
         "Patch": 0
     },
     "inputs": [
@@ -26,6 +26,66 @@
                 "iac": "iac"
             },
             "helpMarkDown": "Categoría que linceo ejecuta en este paso: secrets, sca o iac. Una categoría por paso; para varias, repite la tarea."
+        },
+        {
+            "name": "path",
+            "type": "filePath",
+            "label": "Ruta a escanear",
+            "defaultValue": "",
+            "required": false,
+            "helpMarkDown": "Ruta relativa dentro del workspace del build. Vacío escanea el workspace completo. Se traduce a --path."
+        },
+        {
+            "name": "configPath",
+            "type": "filePath",
+            "label": "Ruta al documento de política",
+            "defaultValue": "",
+            "required": false,
+            "helpMarkDown": "Ruta relativa al documento de política (p. ej. .devsecops/config.toml), siempre relativa a la raíz del workspace — no a 'Ruta a escanear'. Vacío deja que linceo use las rutas convenidas que busca por defecto. Se traduce a --config."
+        },
+        {
+            "name": "imageTag",
+            "type": "string",
+            "label": "Versión de la imagen de linceo",
+            "defaultValue": "0.9.1",
+            "required": true,
+            "helpMarkDown": "Tag de ghcr.io/jdiegoisaza/linceo a usar. El valor por defecto es la versión que esta versión de la extensión soporta y probó; cambiarlo no espera a un release de la extensión, pero tampoco está verificado por ella."
+        },
+        {
+            "name": "onGateFailure",
+            "type": "pickList",
+            "label": "Si el gate falla (exit 1)",
+            "defaultValue": "fail",
+            "required": true,
+            "options": {
+                "fail": "Fallar la tarea",
+                "warn": "Advertir y continuar (SucceededWithIssues)"
+            },
+            "helpMarkDown": "Gobierna únicamente el código de salida 1 (el gate falló). Los códigos 2 (error de configuración) y 3 (herramienta rota o evidencia incompleta) siempre fallan la tarea, sin excepción: un pipeline verde que no escaneó nada es peor que uno rojo."
+        },
+        {
+            "name": "failOn",
+            "type": "pickList",
+            "label": "Severidad de corte (--fail-on)",
+            "defaultValue": "",
+            "required": false,
+            "options": {
+                "": "(usar la política del repositorio)",
+                "critical": "critical",
+                "high": "high",
+                "medium": "medium",
+                "low": "low",
+                "none": "none (forzar sin gate)"
+            },
+            "helpMarkDown": "Si se fija, REEMPLAZA por completo el bloque [thresholds] de .devsecops/config.toml del repositorio escaneado — no se combina con él. Pensado para overrides deliberados por pipeline; la tarea advierte en el log cada vez que este input está activo, incluido 'none'."
+        },
+        {
+            "name": "useSystemAccessToken",
+            "type": "boolean",
+            "label": "Usar System.AccessToken para política remota",
+            "defaultValue": "false",
+            "required": false,
+            "helpMarkDown": "Reenvía la identidad OAuth del propio build (System.AccessToken) al contenedor, para que linceo resuelva [remote_policy] cuando el repositorio de política vive en esta misma organización. Se obtiene automáticamente del endpoint del agente — no requiere declarar System.AccessToken en el YAML del pipeline. Actívalo solo si el repositorio escaneado declara [remote_policy]; apagado por defecto, por mínimo privilegio."
         }
     ],
     "execution": {
