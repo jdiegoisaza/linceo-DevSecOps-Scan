@@ -1,0 +1,19 @@
+{
+  "name": "linceo-scan",
+  "version": "1.0.0",
+  "description": "Tarea de Azure Pipelines que ejecuta linceo como contenedor.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "npx tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^16.18.126"
+  },
+  "dependencies": {
+    "azure-pipelines-task-lib": "^5.0.0"
+  }
+}

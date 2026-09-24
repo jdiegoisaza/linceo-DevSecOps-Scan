@@ -1,0 +1,46 @@
+{
+    "manifestVersion": 1,
+    "id": "linceo-devsecops-scan",
+    "name": "linceo DevSecOps Scan",
+    "version": "0.1.0",
+    "publisher": "juandiego-13",
+    "targets": [
+        {
+            "id": "Microsoft.VisualStudio.Services"
+        }
+    ],
+    "description": "Ejecuta linceo (secrets, sca, iac) como tarea nativa de Azure Pipelines, sin escribir docker run ni variables de entorno a mano.",
+    "categories": [
+        "Azure Pipelines"
+    ],
+    "tags": [
+        "linceo",
+        "devsecops",
+        "security",
+        "secrets",
+        "sca",
+        "iac"
+    ],
+    "icons": {
+        "default": "static/logo.png"
+    },
+
+    "contributions": [
+        {
+            "id": "linceo-scan",
+            "type": "ms.vss-distributed-task.task",
+            "targets": [
+                "ms.vss-distributed-task.tasks"
+            ],
+            "properties": {
+                "name": "tasks/linceo-scan"
+            }
+        }
+    ],
+
+    "files": [
+        {
+            "path": "tasks/linceo-scan/dist"
+        }
+    ]
+}

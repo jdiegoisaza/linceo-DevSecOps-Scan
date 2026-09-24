@@ -1,0 +1,36 @@
+{
+    "$schema": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
+    "id": "13120177-3a31-4d13-ac0f-09687b7e557c",
+    "name": "linceo-scan",
+    "instanceNameFormat": "linceo scan: $(category)",
+    "friendlyName": "linceo scan",
+    "description": "Ejecuta un escaneo de linceo (secrets, sca o iac) usando la imagen de contenedor oficial ghcr.io/jdiegoisaza/linceo.",
+    "helpMarkDown": "[Documentación de linceo](https://github.com/jdiegoisaza/linceo)",
+    "category": "Utility",
+    "author": "your-publisher",
+    "version": {
+        "Major": 0,
+        "Minor": 1,
+        "Patch": 0
+    },
+    "inputs": [
+        {
+            "name": "category",
+            "type": "pickList",
+            "label": "Categoría de escaneo",
+            "defaultValue": "secrets",
+            "required": true,
+            "options": {
+                "secrets": "secrets",
+                "sca": "sca",
+                "iac": "iac"
+            },
+            "helpMarkDown": "Categoría que linceo ejecuta en este paso: secrets, sca o iac. Una categoría por paso; para varias, repite la tarea."
+        }
+    ],
+    "execution": {
+        "Node20_1": {
+            "target": "index.js"
+        }
+    }
+}
