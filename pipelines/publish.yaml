@@ -50,6 +50,20 @@ steps:
   # azure-devops-extension-tasks) instalada en la organización, y una
   # service connection tipo "Visual Studio Marketplace" con el nombre de
   # $(Extension.ServiceConnection) — ver docs/PUBLISHING.md para ambos.
+  #
+  # noWaitValidation: true — deliberado, investigado contra el código
+  # fuente de tfx-cli, no adivinado. Sin este flag, tfx entra a su propio
+  # loop de espera (waitForValidation en
+  # app/exec/extension/_lib/publish.ts): para una extensión privada,
+  # reintenta hasta 120 veces con intervalo creciente hasta 2s (~4
+  # minutos) y si no hay veredicto para entonces, tira
+  # "Validation is taking much longer than usual" y sale con código 255 —
+  # aunque la subida ya haya funcionado. Esos números están hardcodeados
+  # en tfx-cli, no son un input de esta tarea; no hay forma de "esperar
+  # más" aquí, sólo esperar o no esperar. Con noWaitValidation: true, tfx
+  # reporta éxito apenas la subida termina, sin entrar a ese loop — la
+  # validación se comprueba aparte, en el paso siguiente, con un
+  # presupuesto de espera propio y sí configurable.
   - task: PublishAzureDevOpsExtension@5
     displayName: 'Publicar en el Marketplace'
     inputs:
@@ -57,3 +71,29 @@ steps:
       connectedServiceName: '$(Extension.ServiceConnection)'
       fileType: 'vsix'
       vsixFile: '$(System.ArtifactsDirectory)/Extension/*.vsix'
+      noWaitValidation: true
+
+  # Chequeo de sólo lectura contra la API del Marketplace (tfx extension
+  # isvalid) — no toca el .vsix, no repaqueta, no comparte código con
+  # VsixEditor. Publisher/id sí hacen falta aquí (identifican qué
+  # extensión consultar; a diferencia de Publish, esta tarea no puede
+  # inferirlos de un .vsix porque no recibe ninguno). extensionVersion
+  # queda sin fijar a propósito: su default vacío significa "revisa la
+  # última versión enviada" (tfx-cli, IsValidExtension.ts:
+  # `tfx.argIf(extensionVersion, ["--version", extensionVersion])` — vacío
+  # no agrega el flag) — no hace falta, y evitarlo evita reabrir el mismo
+  # tipo de problema que ya causó el error original.
+  #
+  # Reintentos propios (maxRetries × minTimeout ≈ 10 minutos por
+  # defecto) — más generoso que los ~4 minutos internos de Publish, y
+  # ajustable si hiciera falta más margen.
+  - task: IsAzureDevOpsExtensionValid@5
+    displayName: 'Confirmar validación en el Marketplace'
+    inputs:
+      connectTo: 'VsTeam'
+      connectedServiceName: '$(Extension.ServiceConnection)'
+      method: 'id'
+      publisherId: '$(Extension.Publisher)'
+      extensionId: '$(Extension.Id)'
+      maxRetries: 10
+      minTimeout: 1

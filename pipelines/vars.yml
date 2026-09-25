@@ -6,9 +6,16 @@ variables:
     # valor.
     value: 'marketplace-service-connection'
 
-# Publisher/id/nombre de la extensión NO viven aquí — publish.yaml no los
-# pasa como override a PublishAzureDevOpsExtension (ver el porqué en ese
-# archivo). La única fuente de verdad para esos tres campos es
-# vss-extension.json; mantener una copia aquí que nada consume ya fue,
-# literalmente, la clase de duplicado que causó la investigación que llevó
-# a este diseño.
+  # Publisher/id SÍ viven aquí ahora, a diferencia de antes — pero por un
+  # motivo distinto al que se descartó: PublishAzureDevOpsExtension sigue
+  # sin recibirlos (ver publish.yaml, sigue siendo cierto). Los consume
+  # únicamente IsAzureDevOpsExtensionValid, que es de sólo lectura contra
+  # el Marketplace y no repaqueta nada — necesita saber qué extensión
+  # consultar, no tiene forma de leerlo del .vsix como sí puede inferir
+  # publish. Deben coincidir con vss-extension.json:publisher/:id; si
+  # alguna vez divergen, esta tarea consulta la extensión equivocada, no
+  # publica nada mal.
+  - name: Extension.Publisher
+    value: 'juandiego-13'
+  - name: Extension.Id
+    value: 'linceo-devsecops-scan'

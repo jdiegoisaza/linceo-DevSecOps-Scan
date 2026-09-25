@@ -7,7 +7,8 @@ Un solo pipeline (`azure-pipelines.yml`), dos etapas:
    `.vsix` resultante esté completo. Nunca publica nada.
 2. **`publish`** — corre sólo cuando `build` pasó **y** el trigger fue un tag
    (`condition: startsWith(variables['Build.SourceBranch'], 'refs/tags/')`). Descarga
-   el `.vsix` que `build` ya validó — nunca reconstruye — y lo sube al Marketplace.
+   el `.vsix` que `build` ya validó — nunca reconstruye — lo sube al Marketplace, y
+   comprueba en un paso aparte que el Marketplace lo validó.
 
 Mismo patrón que `.github/workflows/ci.yml` + `release.yml` en linceo (build/test en
 cada push, publicar sólo en un tag), expresado como un único pipeline de Azure con una
@@ -71,6 +72,44 @@ forzarlo. La solución no es "pasar la versión de otra forma" — es no pasar n
 estos seis inputs: `publish.yaml` sólo declara `fileType`/`vsixFile`/`connectTo`/
 `connectedServiceName`, y con eso `hasEdits()` da `false`: `endEdit()` devuelve el
 `.vsix` de entrada tal cual, sin tocarlo.
+
+## Por qué `publish` sube y espera la validación en pasos separados
+
+La primera versión de `publish.yaml` dejaba que `PublishAzureDevOpsExtension` esperara
+la validación del Marketplace por sí sola. Eso causó un falso positivo real: la subida
+funcionaba, la extensión quedaba publicada, y la tarea terminaba en rojo de todas
+formas — `tfx` agotaba su espera y salía con código 255 y
+`"Validation is taking much longer than usual. TFX is exiting."`. Un pipeline que
+publica bien y termina en rojo entrena a ignorar el resultado, así que no es aceptable
+dejarlo así.
+
+Investigado contra el código fuente de `tfx-cli`
+(`app/exec/extension/_lib/publish.ts`), no adivinado: sin el input `noWaitValidation`,
+`tfx` entra a un loop propio (`waitForValidation`) que para una extensión privada
+reintenta hasta 120 veces con intervalo creciente hasta 2 segundos (~4 minutos en
+total) antes de tirar ese error — con esos dos números hardcodeados en el código de
+`tfx-cli`, no expuestos como input de la tarea. No hay forma de decirle a `Publish`
+"espera más"; sólo hay esperar (con ese presupuesto fijo) o no esperar en absoluto.
+
+La solución, confirmada contra el código fuente de las dos tareas:
+
+- **`PublishAzureDevOpsExtension`** lleva `noWaitValidation: true` — sube el paquete y
+  reporta éxito de inmediato, sin entrar a ese loop. Sigue siendo una señal real (una
+  subida que de verdad falla sigue fallando este paso); sólo deja de esperar a que el
+  Marketplace termine de procesarla.
+- **`IsAzureDevOpsExtensionValid`**, en un paso aparte, hace la espera de verdad: llama
+  a `tfx extension isvalid` en su propio loop (`promise-retry`), con presupuesto
+  configurable vía `maxRetries`/`minTimeout` (por defecto 10 × 1 minuto ≈ 10 minutos —
+  más generoso que los ~4 minutos internos de `Publish`, y ajustable si hiciera falta
+  más margen). Es de sólo lectura contra la API del Marketplace: no toca el `.vsix`, no
+  pasa por `VsixEditor`, así que no reabre nada de lo de la sección anterior.
+  `extensionVersion` se deja sin fijar a propósito — su default vacío significa
+  "revisa la última versión enviada" (confirmado en `IsValidExtension.ts`:
+  `tfx.argIf(extensionVersion, ...)`, vacío no agrega `--version`), evitando depender
+  de nuevo de un campo que ya sabemos que es delicado en esta familia de tareas.
+
+Resultado: `publish` termina en rojo si y sólo si algo de verdad falló — subir el
+paquete, o que el Marketplace lo rechace — nunca por una espera que se agotó de más.
 
 ## Qué valida antes de publicar, y qué no
 
@@ -151,12 +190,6 @@ adicional — distinto del punto 2, que sí lo requiere).
 
 ## Cosas que se dejaron fuera, a propósito
 
-- **`IsAzureDevOpsExtensionValid@5`** (confirmación post-publicación contra el
-  Marketplace): no se incluyó. El schema exacto de sus inputs no se pudo verificar
-  contra una organización real en este momento, y añadir un paso después de una
-  publicación exitosa que pudiera fallar por un input mal escrito es peor que no
-  tenerlo. Es un candidato razonable para agregar después, una vez confirmado el
-  schema contra la versión instalada de la extensión.
 - **Aprobación manual antes de publicar**: el pipeline de la plantilla original tenía
   un `ManualValidation@0`. No se pidió y no se añadió — si se quiere, es un
   *Environment* con un check de aprobación en Azure DevOps (Pipelines → Environments),
