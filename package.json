@@ -10,7 +10,7 @@
     "prepackage": "npm run build",
     "package": "node scripts/package.js",
     "precreate": "npm run package",
-    "create": "tfx extension create --output-path dist --rev-version"
+    "create": "tfx extension create --output-path dist --no-prompt"
   },
   "keywords": [],
   "author": "",

@@ -1,0 +1,42 @@
+# Steps template: publica al Marketplace el .vsix que ya produjo y validó
+# la etapa "build" — nunca reconstruye ni reempaqueta. Esto es deliberado:
+# el artefacto que se publica debe ser exactamente el mismo que pasó la
+# validación, nunca uno reconstruido después (evita que build y publish
+# puedan divergir en lo que cada uno produce).
+steps:
+  - checkout: none
+
+  - task: DownloadBuildArtifacts@1
+    displayName: 'Descargar artefacto Extension'
+    inputs:
+      buildType: 'current'
+      downloadType: 'single'
+      artifactName: 'Extension'
+      downloadPath: '$(System.ArtifactsDirectory)'
+
+  - task: TfxInstaller@3
+    inputs:
+      version: 'v0.12.x'
+
+  # Requiere la extensión "Azure DevOps Extension Tasks" (ms-devlabs)
+  # instalada en la organización, y una service connection tipo "Visual
+  # Studio Marketplace" con el nombre de $(Extension.ServiceConnection) —
+  # ver docs/PUBLISHING.md para ambos.
+  #
+  # Sin extensionVersion: se publica la versión que ya quedó embebida en
+  # el .vsix (derivada del tag en la etapa build) — no se vuelve a decidir
+  # aquí. updateTasksId explícito en false: regenerar el GUID de la tarea
+  # en este paso rompería cualquier pipeline que ya la referencia.
+  - task: PublishAzureDevOpsExtension@5
+    displayName: 'Publicar en el Marketplace'
+    inputs:
+      connectTo: 'VsTeam'
+      connectedServiceName: '$(Extension.ServiceConnection)'
+      fileType: 'vsix'
+      vsixFile: '$(System.ArtifactsDirectory)/Extension/*.vsix'
+      publisherId: '$(Extension.Publisher)'
+      extensionId: '$(Extension.Id)'
+      extensionName: '$(Extension.Name)'
+      updateTasksId: false
+      extensionVisibility: 'private'
+      extensionPricing: 'free'

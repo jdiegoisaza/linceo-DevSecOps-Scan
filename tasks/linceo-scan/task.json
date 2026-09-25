@@ -11,7 +11,7 @@
     "version": {
         "Major": 0,
         "Minor": 2,
-        "Patch": 0
+        "Patch": 1
     },
     "inputs": [
         {
@@ -29,19 +29,19 @@
         },
         {
             "name": "path",
-            "type": "filePath",
+            "type": "string",
             "label": "Ruta a escanear",
             "defaultValue": "",
             "required": false,
-            "helpMarkDown": "Ruta relativa dentro del workspace del build. Vacío escanea el workspace completo. Se traduce a --path."
+            "helpMarkDown": "Ruta relativa dentro del workspace del build (p. ej. \"backend\"). Vacío escanea el workspace completo. Se traduce a --path, resuelta contra el punto de montaje del contenedor — nunca una ruta absoluta del agente."
         },
         {
             "name": "configPath",
-            "type": "filePath",
+            "type": "string",
             "label": "Ruta al documento de política",
             "defaultValue": "",
             "required": false,
-            "helpMarkDown": "Ruta relativa al documento de política (p. ej. .devsecops/config.toml), siempre relativa a la raíz del workspace — no a 'Ruta a escanear'. Vacío deja que linceo use las rutas convenidas que busca por defecto. Se traduce a --config."
+            "helpMarkDown": "Ruta relativa a un archivo de política (p. ej. \".devsecops/config.toml\"), siempre relativa a la raíz del workspace — no a 'Ruta a escanear'. Vacío deja que linceo use las rutas convenidas que busca por defecto; en ese caso no se pasa --config. Se traduce contra el punto de montaje del contenedor — nunca una ruta absoluta del agente."
         },
         {
             "name": "imageTag",

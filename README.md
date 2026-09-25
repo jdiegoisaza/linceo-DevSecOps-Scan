@@ -22,14 +22,18 @@ vss-extension.json       manifiesto de la extensión
 ## Compilar y empaquetar
 
 Requiere Node.js y, para el último paso, [tfx-cli](https://github.com/microsoft/tfs-cli)
-instalado globalmente (`npm install -g tfx-cli`).
+(vía `npx`, o instalado globalmente con `npm install -g tfx-cli`).
 
 ```bash
 npm install          # instala dependencias raíz + de cada tarea (postinstall)
-npm run build         # compila TypeScript de cada tarea a dist/
-npm run package        # copia task.json/package.json/icon.png a dist/ e instala deps de producción ahí
-npm run create         # tfx extension create --output-path dist --rev-version → genera el .vsix
+npm run package        # empaqueta a dist/ — encadena su propio build vía el hook prepackage
+npm run create         # tfx extension create --output-path dist → genera el .vsix
 ```
+
+`npm run create` ya no usa `--rev-version`: publica la versión que esté comiteada en
+`vss-extension.json` en ese momento. Edítala a mano antes de correrlo si quieres publicar una
+versión distinta. Ver `docs/PUBLISHING.md` para el pipeline que hace esto automáticamente en
+cada tag.
 
 ## Antes de publicar
 

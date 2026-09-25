@@ -1,0 +1,19 @@
+variables:
+  - name: Extension.Publisher
+    value: 'juandiego-13'
+  - name: Extension.Id
+    # Debe coincidir con vss-extension.json:id
+    value: 'linceo-devsecops-scan'
+  - name: Extension.Name
+    # Debe coincidir con vss-extension.json:name — usado como display name
+    # al publicar; no hay forma de leerlo automáticamente desde ahí en este
+    # punto del pipeline, así que se duplica aquí a propósito (bajo riesgo:
+    # en el peor caso el nombre mostrado queda desactualizado, nunca rompe
+    # el build ni la versión publicada).
+    value: 'linceo DevSecOps Scan'
+  - name: Extension.ServiceConnection
+    # Nombre de la service connection tipo "Visual Studio Marketplace" que
+    # hay que crear a mano en el proyecto de Azure DevOps — ver
+    # docs/PUBLISHING.md. Si se crea con otro nombre, cambiar sólo este
+    # valor.
+    value: 'marketplace-service-connection'

@@ -1,0 +1,46 @@
+# Construye y empaqueta en cada push a main o a un tag de versión;
+# publica al Marketplace únicamente cuando el trigger fue un tag. Mismo
+# patrón que .github/workflows/ci.yml + release.yml en linceo, adaptado a
+# un único pipeline de Azure con una etapa condicionada por rama en vez de
+# dos workflows separados.
+
+trigger:
+  branches:
+    include:
+      - main
+  tags:
+    include:
+      - 'v*.*.*'
+
+pr: none
+
+variables:
+  - template: pipelines/vars.yml
+
+stages:
+  - stage: build
+    displayName: 'Build, package and validate'
+    jobs:
+      - job: build
+        displayName: 'npm build + tfx package + validar .vsix'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: pipelines/build.yml
+
+  - stage: publish
+    displayName: 'Publish to Marketplace'
+    dependsOn: build
+    # Único gate de publicación: que el trigger de esta corrida haya sido
+    # un tag, no una rama. No depende de ninguna aprobación manual — si se
+    # quiere ese control, es un "Environment" con check de aprobación en
+    # Azure DevOps, no una condición de pipeline; no se añadió aquí porque
+    # no se pidió.
+    condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))
+    jobs:
+      - job: publish
+        displayName: 'Publicar en el Marketplace'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: pipelines/publish.yaml

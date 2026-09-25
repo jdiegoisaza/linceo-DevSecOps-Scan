@@ -1,0 +1,110 @@
+# Steps template: construye, empaqueta y valida el .vsix. Se ejecuta en
+# CADA trigger (push a main o push de tag) — nunca decide por sí mismo si
+# publica; eso lo decide la condición de la etapa "publish" en
+# azure-pipelines.yml, mirando el mismo $(Build.SourceBranch) que el paso
+# de abajo usa para derivar la versión.
+steps:
+  - task: NodeTool@0
+    displayName: 'Use Node 20.x'
+    inputs:
+      versionSpec: '20.x'
+
+  - script: npm ci
+    displayName: 'npm ci'
+
+  - bash: |
+      set -euo pipefail
+      if [[ "$BUILD_SOURCEBRANCH" == refs/tags/* ]]; then
+        tag="${BUILD_SOURCEBRANCH#refs/tags/}"
+        version="${tag#v}"
+        if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "##vso[task.logissue type=error]El tag '$tag' no tiene forma vX.Y.Z; no se puede derivar de él una versión de extensión."
+          exit 1
+        fi
+
+        # Única fuente de verdad para la versión: el tag. No hay
+        # --rev-version en ningún paso posterior — si esto no corre (push
+        # a rama, más abajo), vss-extension.json conserva la versión ya
+        # comiteada, y el .vsix resultante nunca llega a la etapa publish.
+        node -e "
+          const fs = require('fs');
+          const m = JSON.parse(fs.readFileSync('vss-extension.json', 'utf8'));
+          m.version = process.argv[1];
+          fs.writeFileSync('vss-extension.json', JSON.stringify(m, null, 4) + '\n');
+        " "$version"
+        echo "vss-extension.json version -> $version (derivada del tag $tag)"
+      else
+        echo "Push a rama, no a tag ($BUILD_SOURCEBRANCH): se mantiene la versión ya comiteada en vss-extension.json. Este .vsix es sólo de validación del build; la etapa publish no corre para este trigger."
+      fi
+    displayName: 'Derivar versión del tag (si aplica)'
+
+  # npm run package encadena su propio "build" vía el hook prepackage
+  # (package.json) — no hace falta invocar "npm run build" antes; hacerlo
+  # sería redundante, no incorrecto, pero desperdicia tiempo de agente.
+  # Esta secuencia es justo la que dejó al .vsix incompleto (7 KB en vez
+  # de ~860 KB) la primera vez que se corrió a mano en el orden
+  # equivocado — el hook existe exactamente para que ese orden ya no sea
+  # posible.
+  - script: npm run package
+    displayName: 'npm run package'
+
+  # Sin --rev-version: la versión ya quedó fijada arriba (o es la
+  # comiteada, en un push de rama). tfx-cli se resuelve vía npx en vez de
+  # instalarse como devDependency — mismo mecanismo que usa el maintainer
+  # a mano hoy (npm run create), sólo que aquí explícito.
+  - script: npx --yes tfx-cli extension create --output-path $(Build.ArtifactStagingDirectory) --no-prompt
+    displayName: 'tfx extension create'
+
+  # El bug real que motivó este chequeo: un dist/ empaquetado a medias
+  # (sin node_modules) produce un .vsix de ~7 KB en vez de ~860 KB, que se
+  # instala sin error visible y falla recién en el agente del usuario con
+  # "no encuentra azure-pipelines-task-lib". Dos verificaciones
+  # independientes, no una sola:
+  #   1. Tamaño mínimo — atrapa un dist/ groseramente incompleto.
+  #   2. Contenido exacto — atrapa un dist/ incompleto pero relleno con
+  #      lo suficiente para pasar el chequeo de tamaño (probado a mano:
+  #      un .vsix de 260 KB sin node_modules pasa el (1) y falla el (2)).
+  - bash: |
+      set -euo pipefail
+      vsix="$(ls $(Build.ArtifactStagingDirectory)/*.vsix)"
+      echo "Validando $vsix"
+
+      size_bytes=$(stat -c%s "$vsix")
+      min_bytes=$((200 * 1024))
+      echo "Tamaño: $size_bytes bytes (mínimo esperado: $min_bytes)"
+      if [ "$size_bytes" -lt "$min_bytes" ]; then
+        echo "##vso[task.logissue type=error]El .vsix pesa $size_bytes bytes, por debajo del mínimo esperado ($min_bytes bytes). El empaquetado incompleto que ya llegó a producción una vez (dist/ sin node_modules) pesaba 7 KB; uno completo pesa ~860 KB."
+        exit 1
+      fi
+
+      required_files=(
+        "tasks/linceo-scan/dist/task.json"
+        "tasks/linceo-scan/dist/index.js"
+        "tasks/linceo-scan/dist/node_modules/azure-pipelines-task-lib/package.json"
+      )
+      # awk '{print $4}' asume nombres de archivo sin espacios — cierto
+      # para todo lo que este proyecto empaqueta hoy (task.json, index.js,
+      # paquetes de npm). Capturado en una variable, no en otra tubería:
+      # con pipefail activo, un grep -q como consumidor de una tubería
+      # corta en cuanto encuentra la coincidencia y puede hacer que el
+      # productor reciba SIGPIPE — pipefail entonces reporta ESE fallo
+      # como si la tubería completa hubiera fallado, aunque grep sí haya
+      # encontrado lo que buscaba (intermitente; se reprodujo verificando
+      # este mismo script).
+      listing="$(unzip -l "$vsix" | awk '{print $4}')"
+      for f in "${required_files[@]}"; do
+        if ! grep -qxF "$f" <<< "$listing"; then
+          echo "##vso[task.logissue type=error]El .vsix no contiene '$f' — exactamente el bug de empaquetado incompleto (dist/ sin node_modules) que ya llegó a producción una vez. La tarea fallaría en el agente sin poder cargar azure-pipelines-task-lib."
+          exit 1
+        fi
+      done
+
+      echo "OK: $vsix está completo (tamaño y contenido esperados)."
+    displayName: 'Validar que el .vsix esté completo'
+
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publicar artefacto Extension'
+    inputs:
+      PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+      ArtifactName: 'Extension'
+      publishLocation: 'Container'
