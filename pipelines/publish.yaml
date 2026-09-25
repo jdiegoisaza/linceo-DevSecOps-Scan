@@ -14,7 +14,7 @@ steps:
       artifactName: 'Extension'
       downloadPath: '$(System.ArtifactsDirectory)'
 
-  - task: TfxInstaller@3
+  - task: TfxInstaller@5
     inputs:
       version: 'v0.12.x'
 
