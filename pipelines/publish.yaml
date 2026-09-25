@@ -1,8 +1,36 @@
 # Steps template: publica al Marketplace el .vsix que ya produjo y validó
 # la etapa "build" — nunca reconstruye ni reempaqueta. Esto es deliberado:
 # el artefacto que se publica debe ser exactamente el mismo que pasó la
-# validación, nunca uno reconstruido después (evita que build y publish
-# puedan divergir en lo que cada uno produce).
+# validación, nunca uno reconstruido después.
+#
+# Por eso PublishAzureDevOpsExtension recibe únicamente fileType/vsixFile/
+# connectTo/connectedServiceName, y NADA más — ni extensionVersion, ni
+# publisherId/extensionId/extensionName/extensionVisibility/
+# extensionPricing/updateTasksId. Investigado a fondo (no de memoria) tras
+# un fallo real: cualquiera de esos seis inputs, no vacío ni distinto de
+# "default", hace que PublishExtension.ts (microsoft/azure-devops-
+# extension-tasks) entre en su rama de VsixEditor — que SIEMPRE
+# desempaqueta, edita y reempaqueta el .vsix en un archivo nuevo
+# (`vsixGeneratedFile`), sin comparar contra lo que el manifiesto ya trae
+# (`hasEdits()` es un OR de "¿se pidió un edit?", no "¿cambia algo?" —
+# vsixeditor.ts). No hay forma de pasar cualquiera de estos inputs sin
+# reconstruir.
+#
+# Por eso el fix del error real ("Extension Version was not supplied nor
+# does the extension manifest define one") no es pasarle extensionVersion
+# a esta tarea — eso dispara exactamente esa rama, y encima explota:
+# `VsixEditor.endEdit()` busca la versión en el extension.vsomanifest
+# extraído del propio .vsix, no en vss-extension.json, y tfx extension
+# create nunca escribe un campo version ahí (confirmado inspeccionando un
+# .vsix real de este proyecto: extension.vsixmanifest sí trae
+# Version="X.Y.Z" en su nodo Identity; extension.vsomanifest no trae
+# ningún campo version en absoluto). El fix real es que build ya deja la
+# versión correcta DENTRO del manifiesto empaquetado (ver
+# "Derivar versión del tag" en build.yml, y la Identity/@Version del
+# .vsix resultante) y publish la publica tal cual — sin decirle a esta
+# tarea que edite nada, porque no hace falta: ya está todo correcto ahí
+# dentro (publisher, id, nombre, y la ausencia de <GalleryFlags> ya
+# significa privado, sin necesidad de forzarlo).
 steps:
   - checkout: none
 
@@ -18,15 +46,10 @@ steps:
     inputs:
       version: 'v0.12.x'
 
-  # Requiere la extensión "Azure DevOps Extension Tasks" (ms-devlabs)
-  # instalada en la organización, y una service connection tipo "Visual
-  # Studio Marketplace" con el nombre de $(Extension.ServiceConnection) —
-  # ver docs/PUBLISHING.md para ambos.
-  #
-  # Sin extensionVersion: se publica la versión que ya quedó embebida en
-  # el .vsix (derivada del tag en la etapa build) — no se vuelve a decidir
-  # aquí. updateTasksId explícito en false: regenerar el GUID de la tarea
-  # en este paso rompería cualquier pipeline que ya la referencia.
+  # Requiere la extensión "Azure DevOps Extension Tasks" (microsoft/
+  # azure-devops-extension-tasks) instalada en la organización, y una
+  # service connection tipo "Visual Studio Marketplace" con el nombre de
+  # $(Extension.ServiceConnection) — ver docs/PUBLISHING.md para ambos.
   - task: PublishAzureDevOpsExtension@5
     displayName: 'Publicar en el Marketplace'
     inputs:
@@ -34,9 +57,3 @@ steps:
       connectedServiceName: '$(Extension.ServiceConnection)'
       fileType: 'vsix'
       vsixFile: '$(System.ArtifactsDirectory)/Extension/*.vsix'
-      publisherId: '$(Extension.Publisher)'
-      extensionId: '$(Extension.Id)'
-      extensionName: '$(Extension.Name)'
-      updateTasksId: false
-      extensionVisibility: 'private'
-      extensionPricing: 'free'

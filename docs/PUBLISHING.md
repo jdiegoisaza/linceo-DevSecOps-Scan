@@ -32,6 +32,46 @@ momento — si quieres publicar una versión distinta a mano, edita ese campo an
 correrlo. Es deliberado: la misma regla ("una fuente de verdad, nunca autoincrementar")
 aplica corra el pipeline o corras el comando tú mismo.
 
+## Por qué `publish.yaml` no le pasa `extensionVersion` (ni casi nada) a `PublishAzureDevOpsExtension`
+
+Esto costó una investigación real y vale la pena dejarlo escrito, porque el instinto
+natural — "la versión sale del tag, pásasela a la tarea de publicar" — parece
+razonable y **no funciona**, por dos motivos independientes confirmados contra el
+código fuente de `microsoft/azure-devops-extension-tasks` y contra un `.vsix` real de
+este proyecto:
+
+1. **El `.vsix` que `build` genera trae la versión en dos sitios, pero no en el
+   tercero que `PublishAzureDevOpsExtension` consulta para esto.**
+   `extension.vsixmanifest` (el XML de identidad VSIX) sí trae
+   `Identity Version="X.Y.Z"` — correcto, de ahí sale el nombre del archivo.
+   `extension.vsomanifest` (el JSON de contribuciones) **no trae ningún campo
+   `version`** — así es como `tfx extension create` lo compila, no es un bug del
+   pipeline. Cuando `extensionVersion` llega no vacío a `PublishAzureDevOpsExtension`
+   con `fileType: vsix`, la tarea (`VsixEditor.endEdit()`, con `updateTasksVersion` en
+   `true` por defecto) va a buscar la versión precisamente en ese `.vsomanifest`
+   extraído del `.vsix` — y como no está, explota con
+   `"Extension Version was not supplied nor does the extension manifest define one."`
+2. **Aunque se esquivara ese error, pasar `extensionVersion` reempaqueta de todas
+   formas.** `hasEdits()` en `vsixeditor.ts` es un OR de "¿se pidió algún campo?", sin
+   comparar contra lo que el manifiesto ya trae — así que incluso pasando el mismo
+   valor que `build` ya escribió, `endEdit()` desempaqueta, edita y reempaqueta en un
+   archivo distinto (`vsixGeneratedFile`), que es el que termina publicándose. Esto
+   rompe la garantía de "se publica exactamente el `.vsix` que `build` validó" — el
+   motivo por el que se descartó por completo la idea de que
+   `PublishAzureDevOpsExtension` consulte el Marketplace y autoincremente (ver
+   decisión previa).
+
+Ese mismo `hasEdits()` también se dispara con `publisherId`, `extensionId`,
+`extensionName`, y con `extensionVisibility`/`extensionPricing` en cualquier valor
+distinto de `"default"` — los cinco inputs que `publish.yaml` pasaba antes de esta
+investigación, sin que nadie se lo propusiera. El manifiesto que `build` empaqueta ya
+trae publisher, id y nombre correctos (vienen de `vss-extension.json`), y la ausencia
+de `<GalleryFlags>` en el `.vsixmanifest` ya significa "privado" sin necesidad de
+forzarlo. La solución no es "pasar la versión de otra forma" — es no pasar ninguno de
+estos seis inputs: `publish.yaml` sólo declara `fileType`/`vsixFile`/`connectTo`/
+`connectedServiceName`, y con eso `hasEdits()` da `false`: `endEdit()` devuelve el
+`.vsix` de entrada tal cual, sin tocarlo.
+
 ## Qué valida antes de publicar, y qué no
 
 Dos chequeos independientes sobre el `.vsix` ya generado, antes de publicarlo como
@@ -67,7 +107,7 @@ hace falta, antes que cualquier otra cosa de este documento.
 
 ### 2. Instalar "Azure DevOps Extension Tasks" en la organización
 
-Las tareas `TfxInstaller@3` y `PublishAzureDevOpsExtension@5` que usa
+Las tareas `TfxInstaller@5` y `PublishAzureDevOpsExtension@5` que usa
 `pipelines/publish.yaml` no son nativas de Azure DevOps — vienen de la extensión de
 Marketplace **"Azure DevOps Extension Tasks"** (publisher `ms-devlabs`). Se instala
 una sola vez, a nivel de organización:
