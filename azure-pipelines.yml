@@ -14,6 +14,9 @@ trigger:
 
 pr: none
 
+pool:
+  name: LocalTest
+
 variables:
   - template: pipelines/vars.yml
 
