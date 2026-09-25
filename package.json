@@ -7,7 +7,9 @@
     "postinstall": "node scripts/install.js",
     "prebuild": "node scripts/install.js",
     "build": "node scripts/build.js",
+    "prepackage": "npm run build",
     "package": "node scripts/package.js",
+    "precreate": "npm run package",
     "create": "tfx extension create --output-path dist --rev-version"
   },
   "keywords": [],
