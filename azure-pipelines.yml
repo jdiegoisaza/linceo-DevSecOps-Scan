@@ -14,8 +14,6 @@ trigger:
 
 pr: none
 
-pool:
-  name: LocalTest
 
 variables:
   - template: pipelines/vars.yml
@@ -27,7 +25,7 @@ stages:
       - job: build
         displayName: 'npm build + tfx package + validar .vsix'
         pool:
-          vmImage: 'ubuntu-latest'
+          name: LocalTest
         steps:
           - template: pipelines/build.yml
 
@@ -44,6 +42,6 @@ stages:
       - job: publish
         displayName: 'Publicar en el Marketplace'
         pool:
-          vmImage: 'ubuntu-latest'
+          name: LocalTest
         steps:
           - template: pipelines/publish.yaml
