@@ -10,8 +10,8 @@
     "author": "your-publisher",
     "version": {
         "Major": 0,
-        "Minor": 2,
-        "Patch": 1
+        "Minor": 3,
+        "Patch": 0
     },
     "inputs": [
         {
@@ -86,6 +86,14 @@
             "defaultValue": "false",
             "required": false,
             "helpMarkDown": "Reenvía la identidad OAuth del propio build (System.AccessToken) al contenedor, para que linceo resuelva [remote_policy] cuando el repositorio de política vive en esta misma organización. Se obtiene automáticamente del endpoint del agente — no requiere declarar System.AccessToken en el YAML del pipeline. Actívalo solo si el repositorio escaneado declara [remote_policy]; apagado por defecto, por mínimo privilegio."
+        },
+        {
+            "name": "extraArgs",
+            "type": "string",
+            "label": "Argumentos adicionales para linceo",
+            "defaultValue": "",
+            "required": false,
+            "helpMarkDown": "Argumentos crudos añadidos al final de la invocación de linceo, después de todos los que esta tarea ya construye — para un flag de valor único, la última aparición gana, así que pueden sobrescribir un default de la tarea si hace falta. Se tokenizan de forma segura (igual que ToolRunner.line() de azure-pipelines-task-lib: se parte en argumentos separados respetando comillas dobles) y nunca pasan por un shell — un valor como '--max-rows 200; rm -rf /' llega a linceo como cinco argumentos de texto, no como un comando. No se admite repetir aquí --path, --config ni --fail-on: cada uno ya tiene su propio input, validado — usa ese en vez de este; la tarea falla con un mensaje claro si lo intentas. El valor ya tokenizado se imprime en el log."
         }
     ],
     "execution": {

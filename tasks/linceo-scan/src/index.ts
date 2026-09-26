@@ -101,6 +101,115 @@ function resolveWorkspacePath(sourcesDirectory: string, rawValue: string): Resol
 }
 
 /**
+ * Flags que esta tarea ya gobierna con un input propio y validado —
+ * comparar §0 del ADR ("la tarea expone flags de invocación; nunca deja
+ * ambigüedad"). extraArgs no puede repetirlos: no porque "ganar después"
+ * sea inseguro en general (es justo el comportamiento buscado para todo
+ * lo demás, ver el orden de construcción en run()), sino porque estos
+ * tres en concreto ya pasan por su propia validación — existencia en el
+ * workspace para path/configPath, pickList cerrado para failOn — que un
+ * valor colado por extraArgs se saltaría en silencio. --format no está
+ * en esta lista porque hoy ningún input de esta tarea lo gobierna
+ * todavía; si alguna vez se añade uno, se agrega aquí también.
+ */
+const GOVERNED_FLAGS = ['--path', '--config', '--fail-on'] as const;
+
+/**
+ * Tokeniza una línea de argumentos exactamente como
+ * azure-pipelines-task-lib/toolrunner.ts::ToolRunner.line() lo hace por
+ * dentro (su _argStringToArray, privado, no exportado por el paquete) —
+ * reimplementado aquí porque hace falta inspeccionar los tokens ANTES de
+ * ejecutar (política de flags gobernados, abajo) y loguearlos tal cual
+ * quedan, en una sola pasada: usar .line() habría tokenizado una segunda
+ * vez, sin garantía de coincidir con lo ya validado.
+ *
+ * Verificado, no asumido: comparado contra la función real en un banco de
+ * doce casos —comillas, escapes, y el ejemplo peligroso de abajo— y
+ * coinciden token a token.
+ *
+ * Puramente léxico: separa por espacios fuera de comillas dobles; no
+ * interpreta `;`, `|`, `&`, `&&`, backticks, `$()` ni ninguna sintaxis de
+ * shell — quedan como texto literal dentro de un token. Alcanza porque
+ * nunca se invoca un shell para expandirlos: docker.exec() no pasa
+ * `shell: true`, así que child_process.spawn ejecuta `docker` directo con
+ * el argv resultante. `--max-rows 200; rm -rf /` produce
+ * `['--max-rows', '200;', 'rm', '-rf', '/']` — cinco argumentos literales
+ * que linceo recibe (y probablemente rechace como uso inválido, exit 2),
+ * nunca un comando que se ejecuta.
+ */
+function tokenizeArgLine(argString: string): string[] {
+    const tokens: string[] = [];
+    let inQuotes = false;
+    let escaped = false;
+    let lastCharWasSpace = true;
+    let current = '';
+
+    const append = (c: string): void => {
+        if (escaped && c !== '"') {
+            current += '\\';
+        }
+        current += c;
+        escaped = false;
+    };
+
+    for (let i = 0; i < argString.length; i++) {
+        const c = argString.charAt(i);
+
+        if (c === ' ' && !inQuotes) {
+            if (!lastCharWasSpace) {
+                tokens.push(current);
+                current = '';
+            }
+            lastCharWasSpace = true;
+            continue;
+        }
+        lastCharWasSpace = false;
+
+        if (c === '"') {
+            if (!escaped) {
+                inQuotes = !inQuotes;
+            } else {
+                append(c);
+            }
+            continue;
+        }
+
+        if (c === '\\' && escaped) {
+            append(c);
+            continue;
+        }
+
+        if (c === '\\' && inQuotes) {
+            escaped = true;
+            continue;
+        }
+
+        append(c);
+    }
+
+    if (!lastCharWasSpace) {
+        tokens.push(current.trim());
+    }
+
+    return tokens;
+}
+
+/**
+ * Nombre del input dedicado que corresponde a cada flag gobernado, para
+ * el mensaje de error — que apunte a la solución, no sólo al problema.
+ */
+function dedicatedInputFor(flag: (typeof GOVERNED_FLAGS)[number]): string {
+    switch (flag) {
+        case '--path':
+            return 'path';
+        case '--config':
+            return 'configPath';
+        case '--fail-on':
+            return 'failOn';
+    }
+}
+
+/**
  * Falla con causa propia si `hostPath` no existe, o no es del tipo
  * esperado — antes de que linceo llegue a intentar leerlo dentro del
  * contenedor. Sin esto, una ruta mal escrita se manifiesta como un error
@@ -135,6 +244,7 @@ async function run(): Promise<void> {
         const onGateFailure: string = tl.getInput('onGateFailure', true) ?? 'fail';
         const failOn: string = tl.getInput('failOn', false) ?? '';
         const useSystemAccessToken: boolean = tl.getBoolInput('useSystemAccessToken', false);
+        const extraArgsInput: string = tl.getInput('extraArgs', false) ?? '';
 
         const sourcesDirectory: string = tl.getVariable('Build.SourcesDirectory') ?? '';
         if (!sourcesDirectory) {
@@ -154,6 +264,29 @@ async function run(): Promise<void> {
         const resolvedConfigPath = resolveWorkspacePath(sourcesDirectory, configPathInput);
         if (resolvedConfigPath) {
             requireWorkspacePath('La ruta al documento de política (configPath)', resolvedConfigPath.hostPath, 'file');
+        }
+
+        // Tokenizado y validado ANTES de tocar Docker, como el resto de
+        // esta sección — mismo criterio que resolveWorkspacePath: si algo
+        // está mal, la tarea falla por esa causa, no por lo que linceo
+        // reporte al recibir un argv que no esperaba.
+        const extraArgsTokens = tokenizeArgLine(extraArgsInput);
+        const collidingFlag = GOVERNED_FLAGS.find(flag =>
+            extraArgsTokens.some(t => t === flag || t.startsWith(`${flag}=`))
+        );
+        if (collidingFlag) {
+            throw new Error(
+                `extraArgs incluye "${collidingFlag}", que ya gobierna el input "${dedicatedInputFor(collidingFlag)}" ` +
+                'de esta tarea. Usa ese input en vez de repetirlo aquí: evita que dos valores compitan por el ' +
+                `mismo flag, y evita que el que venga por extraArgs se salte la validación propia de "${dedicatedInputFor(collidingFlag)}".`
+            );
+        }
+        if (extraArgsTokens.length > 0) {
+            // Requisito de depuración: el valor efectivo, ya tokenizado,
+            // visible en el log — no sólo en el eco automático del
+            // comando completo de docker, que puede ser largo y mezclar
+            // esto entre las variables -e.
+            console.log(`extraArgs interpretado como ${extraArgsTokens.length} argumento(s): ${JSON.stringify(extraArgsTokens)}`);
         }
 
         // --fail-on reemplaza [thresholds] por completo en linceo, no se
@@ -215,6 +348,16 @@ async function run(): Promise<void> {
         }
         if (failOn) {
             docker.arg(['--fail-on', failOn]);
+        }
+        // Al final, después de todo lo que construye la tarea — así, para
+        // cualquier flag que admita un solo valor (Typer/Click: gana la
+        // última aparición; confirmado contra src/linceo/cli/scan.py, que
+        // declara --path/--config/--fail-on como Option escalares, no
+        // "multiple"), extraArgs puede sobrescribir un default de la
+        // tarea si hace falta. docker.arg(array) no vuelve a tokenizar:
+        // son exactamente los tokens ya validados y logueados arriba.
+        if (extraArgsTokens.length > 0) {
+            docker.arg(extraArgsTokens);
         }
 
         const exitCode: number = await docker.exec({ ignoreReturnCode: true });
