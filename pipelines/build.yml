@@ -81,6 +81,11 @@ steps:
         "tasks/linceo-scan/dist/task.json"
         "tasks/linceo-scan/dist/index.js"
         "tasks/linceo-scan/dist/node_modules/azure-pipelines-task-lib/package.json"
+        "tasks/linceo-install/dist/task.json"
+        "tasks/linceo-install/dist/index.js"
+        "tasks/linceo-install/dist/tool-pins.json"
+        "tasks/linceo-install/dist/node_modules/azure-pipelines-task-lib/package.json"
+        "tasks/linceo-install/dist/node_modules/azure-pipelines-tool-lib/package.json"
       )
       # awk '{print $4}' asume nombres de archivo sin espacios — cierto
       # para todo lo que este proyecto empaqueta hoy (task.json, index.js,

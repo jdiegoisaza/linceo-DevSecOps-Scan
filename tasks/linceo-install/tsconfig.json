@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "commonjs",
+    "lib": ["ES2015", "dom", "es2017"],
+    "outDir": "dist/",
+    "rootDir": "src/",
+    "strict": true,
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "sourceMap": true,
+    "noImplicitAny": false
+  },
+  "exclude": ["node_modules", "build", "webpack", "coverage", "__tests__"],
+  "types": ["node", "jest"]
+}

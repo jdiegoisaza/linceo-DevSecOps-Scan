@@ -1,0 +1,14 @@
+# Steps template: compara tasks/linceo-install/tool-pins.json contra el
+# Dockerfile del release más reciente de linceo (ADR-000 §12.7). Vive en
+# su propio pipeline (azure-pipelines-tool-pins-check.yml), nunca en el de
+# build/publish — ver ese fichero para el motivo.
+steps:
+  - task: NodeTool@0
+    displayName: 'Use Node 20.x'
+    inputs:
+      versionSpec: '20.x'
+
+  # Sin npm install: el script sólo usa módulos nativos de Node (https,
+  # fs, path) a propósito, para no traer una dependencia sólo por esto.
+  - script: node scripts/check-tool-pins-drift.js
+    displayName: 'Comparar tool-pins.json contra el Dockerfile público de linceo'

@@ -1,0 +1,106 @@
+{
+    "$schema": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
+    "id": "4af0c7c2-408e-4840-8127-720ac0d44cbe",
+    "name": "linceo-install",
+    "instanceNameFormat": "linceo install: $(categories)",
+    "friendlyName": "linceo install",
+    "description": "Instala en el agente, sin Docker, las herramientas que linceo orquesta para las categorías elegidas (gitleaks, trivy, checkov), verificadas contra un checksum publicado. Pensado para usarse junto a linceo-scan en modo pypi.",
+    "helpMarkDown": "[Documentación de linceo](https://github.com/jdiegoisaza/linceo) — ver ADR-000 §12 de esta extensión para el diseño completo de esta tarea.",
+    "category": "Utility",
+    "author": "your-publisher",
+    "version": {
+        "Major": 0,
+        "Minor": 1,
+        "Patch": 0
+    },
+    "inputs": [
+        {
+            "name": "categories",
+            "type": "multiSelect",
+            "label": "Categorías a preparar",
+            "defaultValue": "secrets,sca,iac",
+            "required": true,
+            "options": {
+                "secrets": "secrets (instala gitleaks)",
+                "sca": "sca (instala trivy, con su base de datos de vulnerabilidades)",
+                "iac": "iac (instala checkov)"
+            },
+            "helpMarkDown": "Una entrada por cada categoría que luego vayas a escanear con linceo-scan en modo pypi. El mapeo categoría→herramienta es fijo (secrets→gitleaks, sca→trivy, iac→checkov) y es el mismo que usa linceo internamente — no un detalle que esta tarea decida."
+        },
+        {
+            "name": "gitleaksVersion",
+            "type": "string",
+            "label": "Override: versión de gitleaks",
+            "defaultValue": "",
+            "required": false,
+            "groupName": "overrides",
+            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión (ver tool-pins.json). Si se fija, también hay que fijar gitleaksSha256Amd64 y gitleaksSha256Arm64 — la tarea nunca calcula un checksum sobre lo que descarga, sólo verifica contra uno que se le entregue."
+        },
+        {
+            "name": "gitleaksSha256Amd64",
+            "type": "string",
+            "label": "Override: sha256 de gitleaks (amd64)",
+            "defaultValue": "",
+            "required": false,
+            "groupName": "overrides",
+            "helpMarkDown": "Checksum publicado por el release de gitleaks para linux_x64, copiado de su fichero de checksums oficial — nunca calculado sobre la descarga. Obligatorio si se fija gitleaksVersion y el agente es amd64."
+        },
+        {
+            "name": "gitleaksSha256Arm64",
+            "type": "string",
+            "label": "Override: sha256 de gitleaks (arm64)",
+            "defaultValue": "",
+            "required": false,
+            "groupName": "overrides",
+            "helpMarkDown": "Igual que gitleaksSha256Amd64, para linux_arm64. Obligatorio si se fija gitleaksVersion y el agente es arm64."
+        },
+        {
+            "name": "trivyVersion",
+            "type": "string",
+            "label": "Override: versión de trivy",
+            "defaultValue": "",
+            "required": false,
+            "groupName": "overrides",
+            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión. Si se fija, también hay que fijar trivySha256Amd64 y trivySha256Arm64, por el mismo motivo que gitleaksVersion."
+        },
+        {
+            "name": "trivySha256Amd64",
+            "type": "string",
+            "label": "Override: sha256 de trivy (amd64)",
+            "defaultValue": "",
+            "required": false,
+            "groupName": "overrides",
+            "helpMarkDown": "Checksum publicado por el release de trivy para Linux-64bit. Obligatorio si se fija trivyVersion y el agente es amd64."
+        },
+        {
+            "name": "trivySha256Arm64",
+            "type": "string",
+            "label": "Override: sha256 de trivy (arm64)",
+            "defaultValue": "",
+            "required": false,
+            "groupName": "overrides",
+            "helpMarkDown": "Igual que trivySha256Amd64, para Linux-ARM64. Obligatorio si se fija trivyVersion y el agente es arm64."
+        },
+        {
+            "name": "checkovVersion",
+            "type": "string",
+            "label": "Override: versión de checkov",
+            "defaultValue": "",
+            "required": false,
+            "groupName": "overrides",
+            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión. checkov se instala vía pip, que ya verifica el paquete contra el índice de PyPI — no necesita un checksum acompañante."
+        }
+    ],
+    "groups": [
+        {
+            "name": "overrides",
+            "displayName": "Overrides de versión (avanzado)",
+            "isExpanded": false
+        }
+    ],
+    "execution": {
+        "Node20_1": {
+            "target": "index.js"
+        }
+    }
+}

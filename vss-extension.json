@@ -35,12 +35,25 @@
             "properties": {
                 "name": "tasks/linceo-scan"
             }
+        },
+        {
+            "id": "linceo-install",
+            "type": "ms.vss-distributed-task.task",
+            "targets": [
+                "ms.vss-distributed-task.tasks"
+            ],
+            "properties": {
+                "name": "tasks/linceo-install"
+            }
         }
     ],
 
     "files": [
         {
             "path": "tasks/linceo-scan/dist"
+        },
+        {
+            "path": "tasks/linceo-install/dist"
         }
     ]
 }

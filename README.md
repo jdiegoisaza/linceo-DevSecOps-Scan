@@ -1,22 +1,34 @@
 # linceo-azure-extension
 
 Extensión de Azure DevOps que ejecuta [linceo](https://github.com/jdiegoisaza/linceo) como
-tarea nativa de pipeline: una sola tarea, `linceo-scan`. La tarea ejecuta `docker run` contra
-`ghcr.io/jdiegoisaza/linceo`, monta el workspace del build y propaga las variables de entorno
-que linceo necesita para resolver el contexto (y, opcionalmente, la política remota). El código
-de salida de linceo determina el resultado de la tarea.
+tarea nativa de pipeline, con dos tareas:
 
-Fuera de alcance, deliberadamente: service connection, publicación de artefactos, modo PyPI y
-verificación de rango de versión. Están diseñados en
-`docs/adr/ADR-000-arquitectura-y-alcance-v0.1.md`, pero no implementados todavía.
+- **`linceo-scan`** — ejecuta un escaneo. Dos modos (`executionMode`): `container` (`docker run`
+  contra `ghcr.io/jdiegoisaza/linceo`, monta el workspace y propaga las variables de entorno que
+  linceo necesita) o `pypi` (invoca el `linceo` instalado en el PATH del agente directamente, sin
+  Docker). El código de salida de linceo determina el resultado de la tarea en los dos modos.
+- **`linceo-install`** — prepara un agente Linux para el modo `pypi`: instala gitleaks/trivy/
+  checkov (según las categorías elegidas) sin Docker, verificados contra un checksum publicado,
+  cacheados entre jobs del mismo agente. Ver `docs/adr/ADR-000-arquitectura-y-alcance-v0.1.md`
+  §12 para el diseño completo.
+
+No existe `executionMode: auto` — es una decisión deliberada, no una omisión (ADR §4.2/§12.5).
+
+Fuera de alcance, deliberadamente: service connection propia, y el preflight de rango de versión
+del CLI de linceo contra la matriz de compatibilidad de esta extensión (`supported-linceo.json`,
+§7 del ADR) — ambos diseñados pero no implementados todavía.
 
 ## Estructura
 
 ```
-tasks/linceo-scan/     tarea Node/TypeScript (única tarea de esta extensión)
-scripts/                build.js / install.js / package.js, heredados de la plantilla
-static/logo.png         ícono de la extensión (placeholder — reemplazar antes de publicar)
-vss-extension.json       manifiesto de la extensión
+tasks/linceo-scan/                tarea Node/TypeScript — ejecuta el escaneo (container o pypi)
+tasks/linceo-install/             tarea Node/TypeScript — prepara gitleaks/trivy/checkov sin Docker
+scripts/                          build.js / install.js / package.js, heredados de la plantilla
+scripts/check-tool-pins-drift.js  compara tool-pins.json contra el Dockerfile público de linceo
+pipelines/check-tool-pins.yml     steps template de esa comprobación
+azure-pipelines-tool-pins-check.yml  pipeline programado independiente — ver más abajo
+static/logo.png                   ícono de la extensión (placeholder — reemplazar antes de publicar)
+vss-extension.json                 manifiesto de la extensión
 ```
 
 ## Compilar y empaquetar
@@ -38,23 +50,32 @@ cada tag.
 ## Antes de publicar
 
 - **`publisher`** en `vss-extension.json` debe ser el ID de publisher real de Marketplace.
-- **`static/logo.png`** y **`tasks/linceo-scan/icon.png`** son los íconos genéricos de la
-  plantilla — reemplazarlos antes de publicar.
+- **`static/logo.png`**, **`tasks/linceo-scan/icon.png`** y **`tasks/linceo-install/icon.png`**
+  son los íconos genéricos de la plantilla — reemplazarlos antes de publicar.
 
-## Inputs de la tarea
+## Inputs de `linceo-scan`
 
 | Input | Tipo | Default | Se traduce a |
 |---|---|---|---|
 | `category` | pickList (`secrets`\|`sca`\|`iac`) | `secrets` | `scan <category>` |
-| `path` | filePath | vacío (workspace completo) | `--path /workspace[/<path>]` |
-| `configPath` | filePath | vacío (rutas convenidas) | `--config /workspace/<configPath>` |
-| `imageTag` | string | `0.9.1` | tag de `ghcr.io/jdiegoisaza/linceo` |
+| `executionMode` | pickList (`container`\|`pypi`) | `container` | cómo se invoca linceo — ver abajo |
+| `path` | string | vacío (workspace completo) | `--path` |
+| `configPath` | string | vacío (rutas convenidas) | `--config` |
+| `imageTag` | string (sólo `container`) | `0.9.1` | tag de `ghcr.io/jdiegoisaza/linceo` |
+| `linceoVersion` | string (sólo `pypi`) | `0.9.1` | versión exacta instalada vía pip si no hay `linceo` ya en el PATH |
 | `onGateFailure` | pickList (`fail`\|`warn`) | `fail` | resultado de la tarea cuando linceo sale con código 1 |
 | `failOn` | pickList (vacío\|`critical`\|`high`\|`medium`\|`low`\|`none`) | vacío | `--fail-on` |
 | `useSystemAccessToken` | boolean | `false` | reenvía `System.AccessToken` como `SYSTEM_ACCESSTOKEN` |
+| `extraArgs` | string | vacío | argumentos crudos reenviados al final de la invocación |
 
 Notas importantes, no obvias desde los nombres:
 
+- **No existe `executionMode: auto`.** Los dos modos pueden dar veredictos distintos sobre el
+  mismo repositorio (versiones de herramienta distintas); degradar de uno a otro en silencio
+  cambiaría el resultado del escaneo sin que cambiara la configuración del pipeline. Si el modo
+  elegido no está disponible (Docker ausente en `container`, o `linceo doctor` reporta algo roto
+  o fuera de rango en `pypi`), la tarea falla con un mensaje accionable — nunca prueba el otro
+  modo por su cuenta.
 - **`onGateFailure` sólo gobierna el código de salida 1** (el gate falló). Los códigos 2 (error
   de configuración) y 3 (herramienta rota o evidencia incompleta) siempre fallan la tarea, sin
   excepción — un pipeline verde que no escaneó nada es peor que uno rojo.
@@ -68,7 +89,74 @@ Notas importantes, no obvias desde los nombres:
   declara `[remote_policy]`; por defecto está apagado, por mínimo privilegio (no por fricción de
   configuración, que ya no existe).
 
+## Modo `pypi`: `linceo-install` + `linceo-scan`
+
+`linceo-scan` en modo `pypi` **no instala gitleaks, trivy ni checkov** — asume que ya están en el
+PATH del agente. `linceo-install` es quien los prepara, sin Docker:
+
+| Input de `linceo-install` | Tipo | Default | Qué hace |
+|---|---|---|---|
+| `categories` | multiSelect (`secrets`\|`sca`\|`iac`) | las tres | instala gitleaks/trivy/checkov según la categoría |
+| `gitleaksVersion` / `gitleaksSha256Amd64` / `gitleaksSha256Arm64` | string | vacío (usa el pin) | override de versión — exige los dos checksums |
+| `trivyVersion` / `trivySha256Amd64` / `trivySha256Arm64` | string | vacío (usa el pin) | override de versión — exige los dos checksums |
+| `checkovVersion` | string | vacío (usa el pin) | override de versión (sin checksum: pip ya verifica contra PyPI) |
+
+Puntos no obvios:
+
+- **Único modo de instalación, sin input para elegir otro.** `linceo-install` nunca sobrescribe
+  ni desinstala lo que ya haya en el PATH del agente — instala su propia copia versionada y la
+  antepone al PATH, de forma que gana por resolución sin pisar nada ajeno. Si un agente ya está
+  curado con las herramientas que necesitas y no quieres que esta tarea descargue nada, la
+  respuesta es no añadirla al pipeline — eso ya es una señal explícita.
+  `linceo doctor` (corrido por `linceo-scan` en modo `pypi`) es quien valida versiones contra el
+  rango soportado, no esta tarea.
+- **Las versiones y checksums se copian literalmente del Dockerfile de linceo** —nunca se
+  calculan sobre lo descargado. Ver `tasks/linceo-install/tool-pins.json` y ADR §12.2.
+- **`linceo-install` y `linceo-scan` deben vivir en el mismo job.** El PATH que antepone
+  `linceo-install`, y la variable `TRIVY_CACHE_DIR` que fija para la base de datos de
+  vulnerabilidades de trivy, sólo se propagan a pasos posteriores del mismo job.
+- **`sca` también pre-descarga la base de datos de vulnerabilidades de trivy** la primera vez
+  (`trivy fs --download-db-only`) — sin ella, `linceo scan sca` fallaría en modo `pypi` aunque el
+  binario de trivy esté presente. Se cachea igual que los binarios.
+- **Caché entre jobs:** `linceo-install` usa `Agent.ToolsDirectory`. En agentes self-hosted
+  persistentes sobrevive entre jobs y corridas; en agentes Microsoft-hosted (VM efímera por job)
+  no hay caché posible por ningún medio basado en disco, y la tarea simplemente reinstala cada
+  vez — mismo costo que no tener la tarea, no una regresión.
+
+```yaml
+steps:
+  - task: linceo-install@0
+    inputs:
+      categories: 'secrets,sca'
+
+  - task: linceo-scan@0
+    inputs:
+      category: secrets
+      executionMode: pypi
+
+  - task: linceo-scan@0
+    inputs:
+      category: sca
+      executionMode: pypi
+```
+
+## Comprobación de deriva de `tool-pins.json`
+
+`tasks/linceo-install/tool-pins.json` es una copia manual de valores del Dockerfile de linceo —
+puede quedar desactualizada sin que nada lo note. `azure-pipelines-tool-pins-check.yml` es un
+pipeline **separado** del de build/publish, programado a diario, que resuelve el tag más reciente
+de `github.com/jdiegoisaza/linceo`, descarga su Dockerfile y compara sus `ARG` contra
+`tool-pins.json` — **falla** (no avisa) si difieren (ADR §12.7).
+
+Para activarlo: en Azure DevOps, *Pipelines → New pipeline → Existing Azure Pipelines YAML file*,
+apuntando a `azure-pipelines-tool-pins-check.yml` de este repositorio. No corre solo por existir
+el fichero — como cualquier otro pipeline de este proyecto, hay que registrarlo una vez.
+
 ## Variables de entorno propagadas al contenedor
+
+Esta sección describe el modo `container`. En modo `pypi` no hace falta nada de esto: el proceso
+de linceo hereda el entorno completo de la tarea directamente (ADR §4.6) — es, literalmente, la
+asimetría que esta extensión existe para resolver.
 
 **Contexto** (siempre) — exactamente las que `src/linceo/providers/azure_devops.py::ENV_VARS`
 del propio linceo declara, más `TF_BUILD` como centinela de `--platform auto`:

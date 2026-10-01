@@ -1,0 +1,25 @@
+{
+    "_comment": "Valores copiados literalmente de los ARG del Dockerfile de linceo (https://github.com/jdiegoisaza/linceo). Nunca calculados aquí. Actualizar este fichero es un cambio de contrato de esta extensión (ADR-000 §7.4/§12.2) y debe acompañarse de un bump de versión. La comprobación de deriva contra el release más reciente corre en azure-pipelines-tool-pins-check.yml (ADR-000 §12.7); no la sustituye, sólo avisa cuando hace falta actualizarlo a mano.",
+    "source": {
+        "repository": "https://github.com/jdiegoisaza/linceo",
+        "dockerfileRef": "v0.9.1",
+        "verifiedAt": "2026-10-01"
+    },
+    "gitleaks": {
+        "version": "8.30.1",
+        "sha256": {
+            "amd64": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+            "arm64": "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
+        }
+    },
+    "trivy": {
+        "version": "0.74.0",
+        "sha256": {
+            "amd64": "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+            "arm64": "b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5"
+        }
+    },
+    "checkov": {
+        "version": "3.3.19"
+    }
+}

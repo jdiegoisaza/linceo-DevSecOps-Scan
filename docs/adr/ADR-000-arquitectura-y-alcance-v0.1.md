@@ -129,7 +129,7 @@ necesitando un bloque `env:`, la v0.1 no cumplió su objetivo aunque todo lo dem
 | Comentarios en pull request | Requiere token con permisos de escritura, idempotencia entre corridas y una política de ruido. Es una funcionalidad con su propio ciclo de vida, no un detalle de la tarea. |
 | Pestaña de resultados o resumen markdown en el build | Superficie de UI que hay que versionar y mantener; el log y el artefacto cubren el caso en v0.1. |
 | Service connection propia | §6. |
-| Auto-instalar Gitleaks, Trivy o Checkov | Heredado de linceo (R2/R4): la imagen es la unidad de compatibilidad. Instalar binarios en tiempo de ejecución produciría escaneos cuyo resultado depende del agente. |
+| Auto-instalar Gitleaks, Trivy o Checkov **como efecto secundario de `linceo-scan`** | Heredado de linceo (R2/R4): la imagen es la unidad de compatibilidad. Instalar binarios como parte de un escaneo produciría escaneos cuyo resultado depende del agente. Esto no descarta una tarea *separada y explícita* que los instale como paso propio del pipeline — ver la Enmienda 2026-10-01 (§12), que es la que efectivamente se construyó. |
 | Gestionar baselines (`baseline init` / `migrate`) desde la tarea | Un input que genera supresiones desde CI es un botón para dejar el gate en verde sin mirar. El baseline se crea localmente, con revisión, y se commitea. |
 | Exponer exclusiones, overrides de severidad o herramientas omitidas como inputs | Son elementos de política; viven en `.devsecops/config.toml`. Ver §0 y §9/R3. |
 | Multi-categoría en una sola invocación | El CLI no lo soporta (S4). Cuando lo soporte, es un input nuevo, no una tarea nueva. |
@@ -723,3 +723,231 @@ mantenedor deja de tocar el proyecto porque cada modificación es un riesgo.
 JSON y SARIF como artefacto; lo que este hallazgo añade es el *cómo*, no el *qué*. La única
 decisión nueva —una invocación por formato en vez de una combinada— es consecuencia mecánica del
 propio contrato del CLI, no una elección de diseño con alternativas reales que discutir.
+
+---
+
+### Enmienda 2026-10-01 — Tarea `linceo-install` y modo `pypi` de `linceo-scan`
+
+**Motivo:** el modo `container` es hoy la única vía práctica, y su imagen pesa ~2.37 GB (§4.4)
+aunque el pipeline sólo quiera escanear `secrets`. Esta enmienda construye lo que §4 ya diseñaba
+pero dejaba sin implementar: una segunda tarea, `linceo-install`, que prepara un agente Linux con
+las herramientas que linceo orquesta, y el modo `pypi` de `linceo-scan`, que asume que esas
+herramientas ya están en el PATH. Las dos tareas son independientes: nada en `linceo-scan` exige
+que `linceo-install` haya corrido antes; sin ella, el preflight de §4.3 simplemente falla con la
+salida de `doctor`, igual que si el operador hubiera preparado el agente a mano.
+
+#### §12.1 Qué instala `linceo-install`
+
+**Decisión: input `categories` (multiSelect, `secrets`\|`sca`\|`iac`, default: las tres), con una
+tabla fija categoría→herramienta, no un input de nombres de herramienta.**
+
+```
+secrets → gitleaks
+sca     → trivy (+ su base de datos de vulnerabilidades, §12.5)
+iac     → checkov
+```
+
+Mapeo confirmado contra el código de linceo, no supuesto: `Category.SECRETS`/`SCA`/`IAC` en
+`gitleaks.py`/`trivy.py`/`checkov.py`, y `doctor.py::gather_report` prueba exactamente esas tres
+integraciones. Usar `categories` reutiliza el vocabulario que el usuario ya tiene que conocer para
+`linceo-scan` (mismo pickList) en vez de introducir una segunda taxonomía —nombres de binarios—
+que es un detalle de implementación de linceo. El mapeo se añade a los elementos de contrato de
+§7.4: si linceo alguna vez cambia qué herramienta respalda una categoría, es un cambio de
+contrato declarado, no una sorpresa silenciosa.
+
+**Alternativas descartadas:** un input `tools` directo (vocabulario paralelo que nadie consume
+por sí mismo); derivar `categories` leyendo los inputs de otros pasos `linceo-scan` del mismo
+YAML (Azure DevOps no da esa visibilidad entre tareas en tiempo de ejecución).
+
+#### §12.2 Verificación
+
+**Decisión: versión y checksum sha256 (por arquitectura) se copian literalmente de los `ARG` del
+`Dockerfile` de linceo a `tasks/linceo-install/tool-pins.json`. Checkov es la excepción
+deliberada: no lleva checksum manual.**
+
+Valores vigentes, verificados contra el tag `v0.9.1` del Dockerfile de linceo (confirmado que es
+idéntico al HEAD actual de ese repositorio para este fichero):
+
+| Herramienta | Versión | Verificación |
+|---|---|---|
+| gitleaks | 8.30.1 | sha256 por arquitectura (amd64/arm64), copiado del Dockerfile |
+| trivy | 0.74.0 | sha256 por arquitectura (amd64/arm64), copiado del Dockerfile |
+| checkov | 3.3.19 | ninguna manual — ver argumento abajo |
+
+**Por qué checkov es asimétrico, no un descuido:** gitleaks y trivy se bajan como tarball de un
+release de GitHub sin autenticar — exactamente lo que ADR R4 de linceo exige verificar contra un
+checksum publicado, nunca calculado sobre lo descargado. Checkov se instala con
+`pip install checkov==<pin>`, y pip ya lo verifica contra el índice de PyPI (TLS + hash del
+índice) — una cadena de confianza distinta, ya autenticada, la misma razón que el propio
+Dockerfile de linceo documenta para no pinnear un sha256 de checkov en su etapa `checkov-build`.
+Exigir un checksum manual ahí sería una verificación redundante que ni linceo se exige a sí mismo.
+
+**Mantenimiento del pin, para que no sea una copia que se olvida:** `tool-pins.json` lleva un
+campo `source` con el tag del que se copió y la fecha de verificación. Actualizarlo es un evento
+de versión de esta extensión (mismo criterio que §7.6: cambiar un pin por defecto es un minor).
+La detección de que el pin quedó desactualizado no depende de que alguien se acuerde — ver §12.6.
+
+**Override explícito, misma disciplina que `imageTag`:** inputs opcionales
+`gitleaksVersion`/`gitleaksSha256Amd64`/`gitleaksSha256Arm64` y el trío equivalente para trivy.
+Fijar la versión sin los dos checksums falla la tarea —calcular el checksum sobre lo descargado
+es precisamente lo que esta sección prohíbe—, nunca lo calcula por su cuenta. `checkovVersion` no
+necesita checksums acompañantes, por la asimetría de arriba.
+
+#### §12.3 Caché entre jobs del mismo agente
+
+**Decisión: `Agent.ToolsDirectory`, vía `azure-pipelines-tool-lib` (`findLocalTool`/`cacheDir`/
+`prependPath`) — el mecanismo que usan las tareas nativas de Microsoft (`UsePythonVersion`,
+`NodeTool`, `UseDotNet`) para este caso exacto.**
+
+Verificado contra el código fuente del paquete (`tool.js` de `azure-pipelines-tool-lib@2.281.0`),
+no de memoria: `cacheDir()` escribe en `tl.getVariable('Agent.ToolsDirectory')`, marca la carpeta
+con un fichero `.complete` tras copiar, y `findLocalTool()` sólo la da por válida si ese marcador
+existe — un hit de caché no puede ser una descarga a medias, porque nada deja esa carpeta en un
+estado intermedio marcado como completo.
+
+| Tipo de agente | Qué pasa con la caché |
+|---|---|
+| Self-hosted/privado, máquina persistente | Sobrevive entre jobs y entre corridas, porque es un directorio bajo `_work` del agente y la máquina no se reinicia entre jobs. Es el caso que motiva esta tarea. |
+| Microsoft-hosted | Cada job es una VM efímera nueva; ningún mecanismo basado en disco sobrevive eso. La tarea vuelve a descargar y verificar cada vez — mismo costo que sin esta tarea, no una regresión. |
+| Self-hosted efímero (scale-set) | Se comporta como hosted a efectos de caché si la máquina se recicla por job. |
+
+**No-objetivo, mismo precedente que el peso de la imagen (§4.4):** un caché remoto
+(`Cache@2`, key/restoreKeys contra un blob) daría persistencia en agentes hosted, pero es una
+decisión de la infraestructura del pipeline, no de esta tarea — igual que §1 ya descarta que la
+extensión gestione réplicas o caché de la imagen de contenedor. Se documenta el patrón (un paso
+`Cache@2` antes de `linceo-install`, restaurando sobre la misma ruta de `Agent.ToolsDirectory`);
+no se implementa dentro de la tarea.
+
+#### §12.4 Herramienta ya presente con otra versión
+
+**Decisión: un único modo, sin input. La tarea nunca sobrescribe lo que ya esté en el PATH del
+agente, nunca falla sólo por encontrar una versión distinta, y nunca intenta aceptar una versión
+preexistente "si cumple el rango".**
+
+Mecanismo: la tarea instala (o reutiliza desde caché) su propia copia pinneada en un directorio
+versionado y propio (`<tool-cache>/<tool>/<versión>/<arch>/`) y la antepone al PATH
+(`toolLib.prependPath`, que emite `##vso[task.prependpath]`) — por resolución de PATH, su versión
+gana sobre cualquier otra instalación preexistente, sin tocar ni desinstalar nada que no sea
+suyo. La validación de si la versión resultante cumple el rango soportado queda, siempre, en
+`linceo doctor` (ejecutado después por `linceo-scan` en modo `pypi`, §12.5) — nunca en esta
+tarea, que no reimplementa `SUPPORTED_VERSION_RANGE`.
+
+**Por qué no hay un modo "aceptar si está en el PATH" (`reuseIfPresent`, descartado tras revisión
+del diseño inicial):** el propio rango que `doctor` valida no es una versión, es un intervalo —
+`>=0.50,<1` para trivy son más de cincuenta versiones con comportamientos distintos entre sí.
+"Aceptar lo que haya" significaría escanear con una versión que nadie fijó, elegida por quien
+preparó el agente para un propósito que no era éste, y que sólo se sabe si es aceptable después
+de correr `doctor` — momento en el que ya es demasiado tarde para decidir no descargar nada. Eso
+contradice el resto del diseño (checksums, pines exactos, versión declarada) por la puerta de
+atrás. Quien tiene un agente curado y no quiere la descarga de esta tarea tiene una respuesta ya
+explícita y sin necesidad de un input: no añadir el paso `linceo-install` al pipeline.
+
+#### §12.5 Modo `pypi` de `linceo-scan`
+
+Implementa exactamente lo que §4.2–§4.5 ya diseñaban (`executionMode`: `container`\|`pypi`,
+default `container`; preflight asimétrico de §4.3; venv efímero con versión exacta de §4.5) —
+confirmado que no estaba construido: `tasks/linceo-scan/src/index.ts` sólo tenía la rama Docker,
+y el propio README decía "modo PyPI... diseñado... pero no implementado todavía".
+
+**¿Sigue valiendo el argumento contra `executionMode: auto` ahora que existe una tarea
+instaladora explícita?** Sí, y se refuerza. El argumento original (§4.2) es que `auto` cambiaría
+el veredicto sin cambiar la configuración, de forma invisible. Con `linceo-install` como paso
+explícito y opcional, un `auto` en `linceo-scan` tendría que adivinar la intención del operador
+detectando "¿hay Docker? ¿están las tres herramientas en PATH?" — y ambas condiciones pueden ser
+ciertas a la vez en un agente self-hosted por motivos ajenos a este pipeline (alguien instaló
+gitleaks para otro job). La presencia o ausencia del paso `linceo-install` en el YAML es
+precisamente la señal explícita que el §0 exige ("la tarea es un adaptador de invocación, no un
+segundo lugar donde vive la política") — el argumento no sólo sigue vigente, ahora tiene un
+segundo apoyo concreto.
+
+**Hallazgo no pedido por el encargo original, y que habría salido recién en la primera prueba
+real: trivy necesita su base de datos de vulnerabilidades pre-descargada para funcionar sin
+contenedor.** `linceo` siempre invoca trivy con `--skip-db-update` (ADR R2/§5 de linceo: offline
+por defecto) — sin una base de datos ya presente, trivy falla con
+`--skip-db-update cannot be specified on the first run`, y linceo traduce eso a
+`TrivyDatabaseNotReadyError` con un hint que **ya nombra la solución** (confirmado leyendo
+`src/linceo/adapters/trivy.py`, `TRIVY_DB_NOT_READY_HINT`):
+
+> "Fetch it once, explicitly, with one of: `trivy fs --download-db-only` run by hand on this
+> machine — the one command in this whole workflow allowed to touch the network, and only
+> because you ran it yourself..."
+
+`linceo-install`, al preparar `trivy` para la categoría `sca`, ejecuta exactamente ese comando
+contra su propio directorio de caché (`trivy fs --download-db-only --cache-dir <tool-cache>/
+trivy-db`) y expone `TRIVY_CACHE_DIR` como variable de pipeline (`tl.setVariable`) para que el
+`trivy` que invoque `linceo scan sca` después la encuentre. La base de datos se cachea bajo la
+misma lógica que los binarios, con la versión de trivy como clave de caché (bump de
+`TRIVY_VERSION` invalida la base, que es el comportamiento correcto: no hay garantía de formato
+estable entre majors de trivy).
+
+**Consecuencia operativa a documentar (mismo estilo que §2, sobre compartir el pull de imagen):**
+`linceo-install` y los pasos `linceo-scan` en modo `pypi` deben vivir **en el mismo job** — el
+PATH y `TRIVY_CACHE_DIR` que `linceo-install` propaga vía variable de pipeline sólo llegan a
+pasos posteriores del mismo job, nunca a otro job.
+
+#### §12.6 Límite con el ADR de linceo (R2/R4)
+
+**Decisión: `linceo-install` descarga binarios de terceros como decisión explícita de esta
+extensión. No contradice R2/R4 de linceo porque esas restricciones gobiernan el comportamiento de
+linceo, nunca el de quien prepara el agente antes de que linceo corra.**
+
+Cita literal, no parafraseada, de R2 y R4 (`docs/adr/ADR-000-arquitectura-base-y-alcance-v0.1.md`
+del repositorio de linceo):
+
+> R2: "Los binarios de herramienta (Gitleaks, Trivy) nunca se descargan **en runtime** bajo
+> ninguna circunstancia: si faltan, es un error accionable (ver R4), no un intento de resolución
+> automática."
+>
+> R4: "si un binario requerido no está en PATH, el CLI falla con un error accionable que nombra
+> qué falta, qué versión se espera, **y cómo instalarla** — y nunca intenta instalarla por su
+> cuenta."
+
+El sujeto de las dos frases es siempre el CLI/la herramienta —linceo—, nunca "el operador". R4
+deja un hueco con nombre, "cómo instalarla", que algo tiene que llenar fuera de linceo.
+`linceo-install` es una respuesta concreta y verificada a esa frase, ejecutada como su propio
+paso de pipeline, por un proceso que el operador eligió explícitamente añadir al YAML — nunca
+como efecto secundario de una invocación de `linceo scan`. El caso de la base de datos de trivy
+(§12.5) es la prueba más directa: `linceo-install` ejecuta literalmente el comando que el propio
+código de linceo le recomienda al operador correr a mano.
+
+#### §12.7 Detección de deriva del pin contra el Dockerfile público de linceo
+
+**Problema con la mitigación original de §12.2:** un test que descarga cada asset pinneado y
+compara su checksum contra el valor vendorizado detecta un error de transcripción, pero no
+detecta que linceo subió `TRIVY_VERSION` de `0.74.0` a una versión posterior — `tool-pins.json`
+seguiría siendo internamente consistente (versión y checksum vendorizados coinciden entre sí) y
+sólo estaría desactualizado frente a la realidad, sin que nada lo señale.
+
+**Decisión: una comprobación programada y separada, que resuelve el tag más reciente de
+`github.com/jdiegoisaza/linceo` vía su API pública (`/tags`; el repositorio no usa "Releases" de
+GitHub, confirmado: `/releases` devuelve `[]`), descarga el `Dockerfile` de ese tag vía
+`raw.githubusercontent.com`, extrae sus `ARG` de versión y checksum, y los compara contra
+`tasks/linceo-install/tool-pins.json`. Si difieren, la comprobación falla — no avisa.**
+
+**Por qué falla y no avisa, a diferencia de §7.3 (CLI por encima del rango máximo → avisa y
+continúa):** son dos situaciones con la misma forma superficial —"algo está más nuevo de lo que
+pinneamos"— pero distinto costo de fallar. §7.3 avisa porque ese preflight corre en **cada
+ejecución de un pipeline ajeno**: fallarlo convertiría cada release de linceo en un incidente
+para todo tercero que use la tarea, con el mantenedor como cuello de botella de pipelines que no
+son los suyos. Esta comprobación, en cambio, corre únicamente en el CI de esta extensión, en un
+pipeline propio y programado — no bloquea ningún pipeline de ningún usuario, sólo informa al
+mantenedor de la extensión que su propio pin quedó atrás. Fallar aquí no tiene el costo que
+`§7.3` evita; y avisar tendría el defecto que el propio documento ya señaló dos veces (§4.2, §4.4
+discutidas): "un aviso vive en un log que nadie lee cuando el paso está en verde". Con un
+mantenedor único, un aviso en una corrida programada que nadie abre es, en la práctica, no tener
+comprobación.
+
+**Por qué es un pipeline separado y no un job del pipeline de build/publish:** si viviera en
+`azure-pipelines.yml`, cada push a `main` se pondría en rojo el día que linceo suba una versión,
+sin relación alguna con el contenido de ese push — el mismo problema que `latest` en §7.1, pero
+en el repositorio equivocado. Un pipeline propio (`azure-pipelines-tool-pins-check.yml`,
+programado diariamente) falla sólo esa corrida, con su propio motivo etiquetado, sin tocar el
+semáforo de build/publish.
+
+**Qué pasa si la comprobación en sí no puede completarse** (GitHub no responde, cambia el
+formato del Dockerfile): también falla, con un mensaje que lo distingue explícitamente de
+"hay deriva" — una comprobación que no pudo correr y queda en verde por defecto es el mismo
+patrón de "pipeline verde que no verificó nada" que el §5 de este documento ya rechaza para el
+propio gate de linceo.
+
+---
