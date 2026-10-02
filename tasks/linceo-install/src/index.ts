@@ -81,12 +81,6 @@ async function sha256File(filePath: string): Promise<string> {
     });
 }
 
-/** Vacío ⇒ usa el pin de esta versión de la extensión; cualquier otro valor es un override explícito. */
-function resolveVersion(inputName: string, pinnedVersion: string): string {
-    const override = (tl.getInput(inputName, false) ?? '').trim();
-    return override || pinnedVersion;
-}
-
 interface GithubReleaseSpec {
     toolName: 'gitleaks' | 'trivy' | 'uv';
     binaryName: string;
@@ -104,46 +98,9 @@ interface GithubReleaseSpec {
     archiveDir?: string;
 }
 
-/**
- * Checksum efectivo para un binario de GitHub release: el vendorizado en
- * tool-pins.json si la versión no se tocó, o el que el operador entregue
- * explícitamente si sí la tocó — nunca uno calculado sobre la descarga
- * (ADR-000 §12.2). Lanza si se fijó la versión sin los dos checksums.
- */
-function resolveGithubBinaryChecksum(
-    toolLabel: string,
-    version: string,
-    pin: GithubBinaryPin,
-    releaseArch: ReleaseArch,
-    amd64InputName: string,
-    arm64InputName: string
-): string {
-    if (version === pin.version) {
-        return pin.sha256[releaseArch];
-    }
-    const amd64 = (tl.getInput(amd64InputName, false) ?? '').trim();
-    const arm64 = (tl.getInput(arm64InputName, false) ?? '').trim();
-    if (!amd64 || !arm64) {
-        throw new Error(
-            `${toolLabel}Version está fijado a "${version}" (distinto del pin "${pin.version}"), pero ` +
-            `faltan ${amd64InputName} y/o ${arm64InputName}. Esta tarea nunca calcula un checksum sobre ` +
-            'lo que descarga — sólo verifica contra uno que se le entregue. Copia el checksum publicado ' +
-            'en el fichero de checksums del release correspondiente.'
-        );
-    }
-    return releaseArch === 'amd64' ? amd64 : arm64;
-}
-
 function buildGitleaksSpec(releaseArch: ReleaseArch): GithubReleaseSpec {
-    const version = resolveVersion('gitleaksVersion', TOOL_PINS.gitleaks.version);
-    const expectedSha256 = resolveGithubBinaryChecksum(
-        'gitleaks',
-        version,
-        TOOL_PINS.gitleaks,
-        releaseArch,
-        'gitleaksSha256Amd64',
-        'gitleaksSha256Arm64'
-    );
+    const version = TOOL_PINS.gitleaks.version;
+    const expectedSha256 = TOOL_PINS.gitleaks.sha256[releaseArch];
     const platformSuffix = releaseArch === 'amd64' ? 'linux_x64' : 'linux_arm64';
     const assetName = `gitleaks_${version}_${platformSuffix}.tar.gz`;
     return {
@@ -157,15 +114,8 @@ function buildGitleaksSpec(releaseArch: ReleaseArch): GithubReleaseSpec {
 }
 
 function buildTrivySpec(releaseArch: ReleaseArch): GithubReleaseSpec {
-    const version = resolveVersion('trivyVersion', TOOL_PINS.trivy.version);
-    const expectedSha256 = resolveGithubBinaryChecksum(
-        'trivy',
-        version,
-        TOOL_PINS.trivy,
-        releaseArch,
-        'trivySha256Amd64',
-        'trivySha256Arm64'
-    );
+    const version = TOOL_PINS.trivy.version;
+    const expectedSha256 = TOOL_PINS.trivy.sha256[releaseArch];
     const platformSuffix = releaseArch === 'amd64' ? 'Linux-64bit' : 'Linux-ARM64';
     const assetName = `trivy_${version}_${platformSuffix}.tar.gz`;
     return {
@@ -192,15 +142,8 @@ function buildTrivySpec(releaseArch: ReleaseArch): GithubReleaseSpec {
  * release real 0.12.15 en github.com/astral-sh/uv, no asumido.
  */
 function buildUvSpec(releaseArch: ReleaseArch): GithubReleaseSpec {
-    const version = resolveVersion('uvVersion', TOOL_PINS.uv.version);
-    const expectedSha256 = resolveGithubBinaryChecksum(
-        'uv',
-        version,
-        TOOL_PINS.uv,
-        releaseArch,
-        'uvSha256Amd64',
-        'uvSha256Arm64'
-    );
+    const version = TOOL_PINS.uv.version;
+    const expectedSha256 = TOOL_PINS.uv.sha256[releaseArch];
     const targetTriple = releaseArch === 'amd64' ? 'x86_64-unknown-linux-gnu' : 'aarch64-unknown-linux-gnu';
     const archiveDir = `uv-${targetTriple}`;
     const assetName = `${archiveDir}.tar.gz`;
@@ -245,7 +188,7 @@ async function ensureGithubReleaseBinary(spec: GithubReleaseSpec, cacheArch: str
             `  esperado (checksum publicado): ${spec.expectedSha256}\n` +
             `  obtenido de la descarga:       ${actualSha256}\n` +
             'No se instala un binario que no coincide con su checksum publicado — puede ser una descarga ' +
-            'corrupta, una manipulación en tránsito, o un pin incorrecto si se usó un override de versión.'
+            'corrupta, una manipulación en tránsito, o un pin incorrecto en tool-pins.json.'
         );
     }
     console.log(`${spec.toolName} ${spec.version}: checksum verificado (${actualSha256}).`);
@@ -267,7 +210,7 @@ async function ensureGithubReleaseBinary(spec: GithubReleaseSpec, cacheArch: str
  * de PyPI al instalar (ADR-000 §12.2) — no lleva checksum manual.
  */
 async function ensureCheckov(cacheArch: string): Promise<void> {
-    const version = resolveVersion('checkovVersion', TOOL_PINS.checkov.version);
+    const version = TOOL_PINS.checkov.version;
 
     const cached = toolLib.findLocalTool('checkov', version, cacheArch);
     if (cached) {
@@ -373,24 +316,23 @@ async function run(): Promise<void> {
         // clave de caché quede a la vista, no implícita en un default.
         const cacheArch = os.arch();
 
-        // uv no está condicionado por "categories": a diferencia de
+        // Las categorías se validan ANTES de descargar nada.
+        const categories = Object.keys(CATEGORY_TO_TOOL).filter(category => tl.getBoolInput(category, false));
+        if (categories.length === 0) {
+            throw new Error(
+                'Ninguna categoría seleccionada: activa al menos una de secrets, sca o iac. Esta tarea siempre ' +
+                'instala uv, pero una ejecución sin ninguna categoría no prepara nada que linceo-scan pueda usar.'
+            );
+        }
+        const tools = new Set(categories.map(category => CATEGORY_TO_TOOL[category]));
+
+        // uv no está condicionado por las categorías: a diferencia de
         // gitleaks/trivy/checkov (atados a una categoría de escaneo),
         // uv lo necesita linceo-scan en modo pypi para instalar linceo
         // mismo, sin importar qué categoría se vaya a escanear después
         // (ADR-000 §12.9).
         await ensureGithubReleaseBinary(buildUvSpec(releaseArch), cacheArch);
         configureUvCaching();
-
-        const categories = tl.getDelimitedInput('categories', ',', true);
-        const tools = new Set(
-            categories.map(category => {
-                const tool = CATEGORY_TO_TOOL[category];
-                if (!tool) {
-                    throw new Error(`Categoría desconocida: "${category}". Las categorías válidas son secrets, sca, iac.`);
-                }
-                return tool;
-            })
-        );
 
         if (tools.has('gitleaks')) {
             await ensureGithubReleaseBinary(buildGitleaksSpec(releaseArch), cacheArch);

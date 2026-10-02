@@ -1193,3 +1193,101 @@ situación que el modo `pypi` deba absorber en silencio degradando a algo peor.
 | `linceo-install` necesario sólo si se usan sus categorías | `linceo-install` necesario siempre que `executionMode: pypi`, para cualquier categoría |
 
 ---
+
+### Enmienda 2026-10-02 — §12.10 `linceo-install@1`: sin overrides sueltos, categorías booleanas
+
+Dos cambios de contrato en los inputs de `linceo-install`, publicados como cambio mayor de la
+tarea (`0.2.x` → `1.0.0`). Ambos rompen pipelines ya escritos.
+
+#### §12.10.1 Desaparecen los nueve overrides (sustitución por `toolPinsFile` revocada en §12.10.3)
+
+**Decisión: desaparecen `gitleaksVersion`, `gitleaksSha256Amd64`/`Arm64`, `trivyVersion`,
+`trivySha256Amd64`/`Arm64`, `checkovVersion`, `uvVersion` y `uvSha256Amd64`/`Arm64` (§12.2,
+§12.9.2). Se propuso sustituirlos por un input opcional `toolPinsFile` (ruta, dentro del
+workspace, a un fichero con el formato de `tool-pins.json`); esa sustitución se revocó antes de
+publicar — ver §12.10.3. Quedan pins fijos y sin input.**
+
+**Por qué:** no había un caso real. Nueve de once inputs eran overrides que nadie iba a rellenar
+desde el formulario —sobre todo los checksums, que hay que copiar a mano del fichero de checksums
+de cada release, dos arquitecturas por herramienta—, y ensanchaban la superficie del formulario de
+una tarea cuyo uso normal no toca ninguno. Quien de verdad necesite anclar versiones distintas
+tiene dos vías: el fichero de pins (versionado en su repositorio, revisable en un PR, un solo
+sitio donde mirar), o el modo `container` (`imageTag`), donde las versiones de las herramientas
+vienen ya fijadas dentro de la imagen.
+
+**Lo que no cambia:** la regla de §12.2 —versión y checksum van juntos, copiados de una fuente
+independiente, nunca calculados sobre lo descargado— sigue siendo la del `tool-pins.json` de la
+extensión; lo que desaparece es la vía para sustituirlo desde el pipeline.
+
+#### §12.10.2 `categories` (multiSelect) se sustituye por tres booleanos
+
+**Decisión: `secrets`, `sca` e `iac`, tipo `boolean`, los tres `true` por defecto (conserva el
+comportamiento de `categories` por defecto). Reemplaza a §12.1 en cuanto al tipo del input; el
+mapeo categoría→herramienta (§12.1) no cambia.**
+
+**Por qué:** el tipo `multiSelect` se renderiza bien en el formulario clásico, pero el validador
+del esquema de YAML del editor de Azure DevOps lo rechaza (con los tres valores marca "Value is
+not accepted. Valid values: secrets, sca, iac"), aunque en ejecución funcione. Un error permanente
+en el editor es peor que un campo de más: acaba ignorándose, y entonces tampoco se ven los
+errores reales. Un `boolean` solo admite `true`/`false`, que el esquema valida sin falsos
+positivos, y el editor no puede ofrecer nada que la tarea no soporte. Si ninguna categoría queda
+activa, la tarea falla con un mensaje claro (era `required: true` con `categories`; el equivalente
+ahora es "al menos una").
+
+**Migración:** `linceo-install@0` debería dejar de resolver tras publicar esta versión (la extensión
+sólo empaqueta una versión mayor de cada tarea; comportamiento de Azure DevOps a confirmar al
+publicar, junto con la verificación pendiente de `properties.name`): hay que cambiar a `linceo-install@1` y reescribir
+`categories: 'secrets,sca'` como `iac: false`; los overrides no tienen sustituto (§12.10.3). Se
+prefirió un fallo ruidoso a mantener `@0`, donde un input eliminado se habría ignorado en
+silencio —incluido un pin de versión, que habría dejado de aplicarse sin aviso.
+
+#### §12.10.3 Se revoca `toolPinsFile`: pins fijos, sin input
+
+**Decisión: `linceo-install` no tiene ningún input para cambiar versiones ni checksums de las
+herramientas. Los pins son los de `tool-pins.json`, fijos por versión de la extensión. La
+propuesta de §12.10.1 (`toolPinsFile`) se implementó, se revisó y se retiró antes de publicarse.**
+
+**Por qué:** el fichero vivía en el repositorio escaneado, así que quien pudiera modificarlo
+decidía qué binario se descarga y ejecuta en el agente y lo acompañaba del checksum que él mismo
+escribía; la verificación sólo confirmaba que el binario coincidía con lo que el autor declaró. Si
+el pipeline valida PRs, el autor de un PR obtiene ejecución arbitraria en el agente. Es la misma
+frontera que linceo ya resolvió para su política —exclusiones del repositorio escaneado, umbrales
+del central—, sólo que aquí lo que cruza la frontera no es un umbral sino código ejecutable.
+Matiz de alcance: si el YAML del pipeline no está gobernado (en Azure Repos, un build de PR usa el
+YAML de la rama del PR), el riesgo ya existe por otra vía y el fichero no añade nada; si sí lo
+está (plantillas `extends`, definición en otro repositorio), el fichero abre exactamente la
+brecha que esa gobernanza cierra. Se diseña contra el segundo escenario.
+
+**Criterio:** el de §12.4 (`reuseIfPresent`) —no abrir por la puerta de atrás lo que el resto del
+diseño cierra, y no añadir un input cuando ya hay una respuesta explícita— más una regla de
+seguridad: **una garantía que depende de que el usuario configure bien el pipeline no cuenta**;
+tiene que ser mecánica. Además, no había un caso real que justificara asumir un modelo de
+seguridad para el input (la misma razón por la que desaparecieron los nueve overrides).
+
+**Alternativas descartadas:**
+
+- **Fuente fuera del repositorio escaneado** (Secure File, artefacto, ruta fuera del workspace,
+  variable): lo único mecánico sería rechazar rutas bajo `Build.SourcesDirectory`, y la tarea no
+  puede saber de dónde salió el fichero, sólo dónde está; con varios repositorios todos caen bajo
+  `s/`. Una variable con el contenido en línea es peor: las definidas en el YAML las controla
+  quien edita el YAML. Seguridad por convención.
+- **Sólo versión, checksums resueltos contra la fuente oficial en ejecución:** cierra la ejecución
+  arbitraria (el PR sólo elige entre versiones que el upstream publicó, con la versión validada por
+  regex antes de construir la URL), pero el checksum bajado del mismo release que el binario
+  protege contra corrupción, no contra un release comprometido —hoy el checksum viene de una
+  fuente independiente y revisada (R4)—; exige código nuevo para tres formatos de checksum
+  distintos; y deja al autor del PR bajar la versión de la herramienta de escaneo dentro del rango
+  soportado (`linceo doctor` sólo rechaza lo que cae fuera del rango, que es amplio).
+
+**Coste que se acepta, y no es menor:** con los pins fijos, **un fix de seguridad en gitleaks,
+trivy o checkov (o uv) obliga a esperar un release de la extensión para el modo `pypi`.** Mitigación
+existente: el modo `container` con `imageTag`, donde la imagen la publica el mantenedor de linceo
+y no depende del ciclo de esta extensión. La comprobación de deriva (§12.7) avisa cuando el pin
+quedó atrás, pero no acelera el release.
+
+**Disparador para reconsiderar (variante B'):** que aparezca un caso real —alguien que necesita
+fijar una versión distinta, a la que no puede llegar con `imageTag` ni esperando al release—. La
+vía sería un input de **sólo versión**, entre las que la extensión trae **vendorizadas con sus
+checksums revisados** (`tool-pins.json` pasaría a una lista de versiones por herramienta, y la
+comprobación de deriva se ampliaría a todas): el PR no podría nombrar ningún binario que no haya
+pasado por revisión. Hasta que ese caso exista, no se construye.

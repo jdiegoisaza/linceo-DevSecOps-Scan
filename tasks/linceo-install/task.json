@@ -2,127 +2,41 @@
     "$schema": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
     "id": "4af0c7c2-408e-4840-8127-720ac0d44cbe",
     "name": "linceo-install",
-    "instanceNameFormat": "linceo install: $(categories)",
+    "instanceNameFormat": "linceo install",
     "friendlyName": "linceo install",
     "description": "Instala en el agente, sin Docker, las herramientas que linceo orquesta para las categorías elegidas (gitleaks, trivy, checkov) y uv, que linceo-scan en modo pypi usa para crear el entorno de linceo mismo. Los binarios se verifican contra un checksum publicado; checkov, contra el índice de PyPI. Sólo agentes Linux.",
     "helpMarkDown": "[Documentación de linceo](https://github.com/jdiegoisaza/linceo) — ver ADR-000 §12 de esta extensión para el diseño completo de esta tarea.",
     "category": "Utility",
     "author": "juandiego-13",
     "version": {
-        "Major": 0,
-        "Minor": 2,
-        "Patch": 1
+        "Major": 1,
+        "Minor": 0,
+        "Patch": 0
     },
     "inputs": [
         {
-            "name": "categories",
-            "type": "multiSelect",
-            "label": "Categorías a preparar",
-            "defaultValue": "secrets,sca,iac",
-            "required": true,
-            "options": {
-                "secrets": "secrets (instala gitleaks)",
-                "sca": "sca (instala trivy, con su base de datos de vulnerabilidades)",
-                "iac": "iac (instala checkov)"
-            },
-            "helpMarkDown": "Una entrada por cada categoría que luego vayas a escanear con linceo-scan en modo pypi. El mapeo categoría→herramienta es fijo (secrets→gitleaks, sca→trivy, iac→checkov) y es el mismo que usa linceo internamente — no un detalle que esta tarea decida. uv se instala siempre, sin importar las categorías elegidas."
+            "name": "secrets",
+            "type": "boolean",
+            "label": "Instalar gitleaks (categoría secrets)",
+            "defaultValue": "true",
+            "required": false,
+            "helpMarkDown": "Prepara gitleaks para ejecutar luego linceo-scan con category: secrets en modo pypi. El mapeo categoría→herramienta es fijo (secrets→gitleaks, sca→trivy, iac→checkov) y es el mismo que usa linceo internamente. Activo por defecto; hay que dejar activa al menos una de las tres categorías. uv se instala siempre, sin importar estas casillas."
         },
         {
-            "name": "gitleaksVersion",
-            "type": "string",
-            "label": "Override: versión de gitleaks",
-            "defaultValue": "",
+            "name": "sca",
+            "type": "boolean",
+            "label": "Instalar trivy (categoría sca)",
+            "defaultValue": "true",
             "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión (ver tool-pins.json). Si se fija, también hay que fijar gitleaksSha256Amd64 y gitleaksSha256Arm64 — la tarea nunca calcula un checksum sobre lo que descarga, sólo verifica contra uno que se le entregue."
+            "helpMarkDown": "Prepara trivy y su base de datos de vulnerabilidades para ejecutar luego linceo-scan con category: sca en modo pypi. Activo por defecto."
         },
         {
-            "name": "gitleaksSha256Amd64",
-            "type": "string",
-            "label": "Override: sha256 de gitleaks (amd64)",
-            "defaultValue": "",
+            "name": "iac",
+            "type": "boolean",
+            "label": "Instalar checkov (categoría iac)",
+            "defaultValue": "true",
             "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Checksum publicado por el release de gitleaks para linux_x64, copiado de su fichero de checksums oficial — nunca calculado sobre la descarga. Obligatorio si se fija gitleaksVersion y el agente es amd64."
-        },
-        {
-            "name": "gitleaksSha256Arm64",
-            "type": "string",
-            "label": "Override: sha256 de gitleaks (arm64)",
-            "defaultValue": "",
-            "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Igual que gitleaksSha256Amd64, para linux_arm64. Obligatorio si se fija gitleaksVersion y el agente es arm64."
-        },
-        {
-            "name": "trivyVersion",
-            "type": "string",
-            "label": "Override: versión de trivy",
-            "defaultValue": "",
-            "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión. Si se fija, también hay que fijar trivySha256Amd64 y trivySha256Arm64, por el mismo motivo que gitleaksVersion."
-        },
-        {
-            "name": "trivySha256Amd64",
-            "type": "string",
-            "label": "Override: sha256 de trivy (amd64)",
-            "defaultValue": "",
-            "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Checksum publicado por el release de trivy para Linux-64bit. Obligatorio si se fija trivyVersion y el agente es amd64."
-        },
-        {
-            "name": "trivySha256Arm64",
-            "type": "string",
-            "label": "Override: sha256 de trivy (arm64)",
-            "defaultValue": "",
-            "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Igual que trivySha256Amd64, para Linux-ARM64. Obligatorio si se fija trivyVersion y el agente es arm64."
-        },
-        {
-            "name": "checkovVersion",
-            "type": "string",
-            "label": "Override: versión de checkov",
-            "defaultValue": "",
-            "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión. checkov se instala con uv (uv venv + uv pip install) en un venv propio — no requiere python3 ni el paquete python3-venv en el agente — y el índice de PyPI ya verifica el paquete — no necesita un checksum acompañante."
-        },
-        {
-            "name": "uvVersion",
-            "type": "string",
-            "label": "Override: versión de uv",
-            "defaultValue": "",
-            "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión. Si se fija, también hay que fijar uvSha256Amd64 y uvSha256Arm64 — misma regla que gitleaksVersion/trivyVersion. uv no es una herramienta que linceo orqueste: se instala siempre, sin importar qué categorías se elijan arriba, porque linceo-scan en modo pypi la necesita para crear el entorno de linceo mismo."
-        },
-        {
-            "name": "uvSha256Amd64",
-            "type": "string",
-            "label": "Override: sha256 de uv (amd64)",
-            "defaultValue": "",
-            "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Checksum publicado por el release de uv para x86_64-unknown-linux-gnu. Obligatorio si se fija uvVersion y el agente es amd64."
-        },
-        {
-            "name": "uvSha256Arm64",
-            "type": "string",
-            "label": "Override: sha256 de uv (arm64)",
-            "defaultValue": "",
-            "required": false,
-            "groupName": "overrides",
-            "helpMarkDown": "Igual que uvSha256Amd64, para aarch64-unknown-linux-gnu. Obligatorio si se fija uvVersion y el agente es arm64."
-        }
-    ],
-    "groups": [
-        {
-            "name": "overrides",
-            "displayName": "Overrides de versión (avanzado)",
-            "isExpanded": false
+            "helpMarkDown": "Prepara checkov (con uv, en un venv propio; no requiere python3 ni python3-venv en el agente) para ejecutar luego linceo-scan con category: iac en modo pypi. Activo por defecto."
         }
     ],
     "execution": {

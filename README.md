@@ -58,7 +58,9 @@ cada tag.
   dedujo de la documentación de Microsoft, **no está confirmado empíricamente**. Tras la primera
   publicación con este cambio, en una organización con la extensión ya instalada: (1) comprobar
   que `linceo-scan` y `linceo-install` siguen apareciendo en el catálogo de tareas, y (2) correr un
-  pipeline existente que use `linceo-scan@0` y comprobar que resuelve.
+  pipeline existente que use `linceo-scan@0` y comprobar que resuelve. (3) Con `linceo-install@1`:
+  comprobar que un pipeline con `linceo-install@0` falla con un error claro de versión no
+  encontrada, y que uno con `@1` instala.
 
 - **`publisher`** en `vss-extension.json` debe ser el ID de publisher real de Marketplace.
 - **`static/logo.png`**, **`tasks/linceo-scan/icon.png`** y **`tasks/linceo-install/icon.png`**
@@ -107,18 +109,26 @@ el PATH del agente. `linceo-install` es quien los prepara, sin Docker:
 
 | Input de `linceo-install` | Tipo | Default | Qué hace |
 |---|---|---|---|
-| `categories` | multiSelect (`secrets`\|`sca`\|`iac`) | las tres | instala gitleaks/trivy/checkov según la categoría |
-| `gitleaksVersion` / `gitleaksSha256Amd64` / `gitleaksSha256Arm64` | string | vacío (usa el pin) | override de versión — exige los dos checksums |
-| `trivyVersion` / `trivySha256Amd64` / `trivySha256Arm64` | string | vacío (usa el pin) | override de versión — exige los dos checksums |
-| `checkovVersion` | string | vacío (usa el pin) | override de versión (sin checksum: PyPI ya verifica el paquete; se instala con `uv`) |
-| `uvVersion` / `uvSha256Amd64` / `uvSha256Arm64` | string | vacío (usa el pin) | override de versión — exige los dos checksums |
+| `secrets` | boolean | `true` | instala gitleaks (categoría `secrets`) |
+| `sca` | boolean | `true` | instala trivy y su base de datos de vulnerabilidades (categoría `sca`) |
+| `iac` | boolean | `true` | instala checkov (categoría `iac`) |
+
+Al menos una de las tres categorías debe quedar activa. Los inputs son booleanos (y no una lista
+`categories`) para que el editor de YAML de Azure DevOps los valide sin falsos errores.
+
+> **Cambio mayor en `linceo-install@1`.** Desaparecen `categories` (reemplazado por los tres
+> booleanos) y los nueve overrides (`gitleaksVersion`, `gitleaksSha256Amd64`/`Arm64`,
+> `trivyVersion`, `trivySha256Amd64`/`Arm64`, `checkovVersion`, `uvVersion`,
+> `uvSha256Amd64`/`Arm64`) sin sustituto: los pins son fijos. Los pipelines con
+> `linceo-install@0` hay que migrarlos a `@1` y reescribir esos inputs; ver
+> ADR §12.10 para el porqué.
 
 Puntos no obvios:
 
-- **`uv` se instala siempre, sin importar `categories`.** A diferencia de gitleaks/trivy/checkov
+- **`uv` se instala siempre, sin importar las categorías activas.** A diferencia de gitleaks/trivy/checkov
   (atados a una categoría de escaneo), `linceo-scan` en modo `pypi` necesita `uv` para instalar
   linceo mismo sin importar qué categoría se escanee después — es la primera herramienta de esta
-  tarea que no depende de `categories`.
+  tarea que no depende de las categorías.
 - **Único modo de instalación, sin input para elegir otro — incluido `uv`.** `linceo-install`
   nunca sobrescribe ni desinstala lo que ya haya en el PATH del agente — instala su propia copia
   versionada y la antepone al PATH, de forma que gana por resolución sin pisar nada ajeno. Si un
@@ -156,11 +166,21 @@ tiene ese problema en absoluto. Ver ADR §12.9 para el detalle y la verificació
 Si `uv` no está en el PATH, la tarea falla con un mensaje accionable — no cae de vuelta al
 mecanismo basado en `python -m venv` que tenía este problema.
 
+### Versiones de las herramientas: fijas, sin input
+
+Las versiones y checksums de gitleaks, trivy, checkov y uv son los de
+`tasks/linceo-install/tool-pins.json` y no se pueden cambiar desde el pipeline. Es deliberado: un
+input que dejara anclar otra versión (p. ej. un fichero de pins dentro del repositorio escaneado)
+permitiría a quien pueda modificar ese repositorio —el autor de un PR— decidir qué binario se
+ejecuta en el agente. **Un fix de seguridad en una de estas herramientas obliga a esperar un
+release de la extensión** para el modo `pypi`; si no puedes esperar, usa el modo `container` con
+`imageTag`. Ver ADR §12.10.3.
+
 ```yaml
 steps:
-  - task: linceo-install@0
+  - task: linceo-install@1
     inputs:
-      categories: 'secrets,sca'
+      iac: false    # sólo secrets y sca
 
   - task: linceo-scan@0
     inputs:

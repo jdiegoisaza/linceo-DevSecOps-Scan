@@ -2,7 +2,7 @@
     "manifestVersion": 1,
     "id": "linceo-devsecops-scan",
     "name": "linceo DevSecOps Scan",
-    "version": "0.4.2",
+    "version": "0.5.0",
     "publisher": "juandiego-13",
     "targets": [
         {
