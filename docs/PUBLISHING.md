@@ -199,16 +199,17 @@ adicional — distinto del punto 2, que sí lo requiere).
   target de publicación (Marketplace, público bajo `juandiego-13`), no dos entornos
   instalados en paralelo.
 
-## Advertencia cosmética conocida
+## El warning de tfx sobre `index.js` (resuelto)
 
-`tfx extension create` imprime un warning:
+tfx-cli ≥ 0.24 valida, por cada contribución de tipo tarea, el `task.json` de la carpeta de
+`properties.name` **y el de sus subcarpetas directas**. Con `name: tasks/linceo-scan` encontraba
+dos: el fuente (`tasks/linceo-scan/task.json`, sin `index.js` al lado — tsc escribe en `dist/`) y
+el compilado, e imprimía `execution.Node20_1.target references file that does not exist:
+index.js`. Ahora `properties.name` apunta a `tasks/<tarea>/dist`, así que sólo se valida el
+compilado. El `.vsix` tiene las mismas rutas de antes; sólo cambia ese campo del manifiesto.
 
-```
-warning: linceo-scan: execution.Node20_1.target references file that does not exist: index.js
-```
-
-Es un falso positivo — compara contra `tasks/linceo-scan/` (la carpeta fuente, donde
-en efecto no hay `index.js`, sólo `src/index.ts`) en vez de
-`tasks/linceo-scan/dist/` (la carpeta empaquetada, donde sí está). El `.vsix` se
-genera correctamente pese al warning; verificado con `unzip -l` contra un `.vsix` real
-de este proyecto. No bloquea el pipeline.
+**Pendiente de confirmar empíricamente:** que cambiar `properties.name` no afecte a instalaciones
+existentes. La documentación de Microsoft sólo dice que debe coincidir con la carpeta de la tarea;
+lo inmutable es el id de la extensión, el GUID de la tarea y su `name`, que no cambian. Tras
+publicar, verificar en una organización que ambas tareas siguen apareciendo y que un pipeline con
+`linceo-scan@0` sigue resolviendo.

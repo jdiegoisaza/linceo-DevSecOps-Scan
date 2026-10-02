@@ -276,17 +276,27 @@ async function ensureCheckov(cacheArch: string): Promise<void> {
         return;
     }
 
-    const pythonPath = tl.which('python3', true);
+    // uv ya quedó en el PATH de este proceso (ensureGithubReleaseBinary lo
+    // antepone antes de llegar aquí). Se usa `uv venv` + `uv pip install`
+    // en vez de `python -m venv` + pip por la misma razón que linceo-scan
+    // (ADR-000 §12.9): Debian/Ubuntu empaquetan "ensurepip" aparte
+    // (python3.X-venv) y sin él `python -m venv` falla al arrancar pip
+    // dentro del entorno, sin nombrar la causa. uv no necesita ensurepip
+    // ni un python3 preinstalado: descarga uno autocontenido si hace falta.
+    const uvPath = tl.which('uv', true);
     const agentTemp = tl.getVariable('Agent.TempDirectory') ?? '';
     const tempVenvDir = path.join(agentTemp, `linceo-install-checkov-venv-${Date.now()}`);
 
-    console.log(`checkov ${version}: no está en caché. Creando venv aislado e instalando desde PyPI.`);
-    await tl.tool(pythonPath).arg(['-m', 'venv', tempVenvDir]).exec();
-    await tl.tool(path.join(tempVenvDir, 'bin', 'pip')).arg(['install', `checkov==${version}`]).exec();
+    console.log(`checkov ${version}: no está en caché. Creando venv aislado con uv e instalando desde PyPI.`);
+    await tl.tool(uvPath).arg(['venv', tempVenvDir]).exec();
+    await tl
+        .tool(uvPath)
+        .arg(['pip', 'install', '--python', path.join(tempVenvDir, 'bin', 'python'), `checkov==${version}`])
+        .exec();
 
     const cachedDir = await toolLib.cacheDir(tempVenvDir, 'checkov', version, cacheArch);
     toolLib.prependPath(path.join(cachedDir, 'bin'));
-    console.log(`checkov ${version}: instalado (pip, verificado por el índice de PyPI) y cacheado en ${cachedDir}.`);
+    console.log(`checkov ${version}: instalado (uv pip, verificado por el índice de PyPI) y cacheado en ${cachedDir}.`);
 }
 
 /**

@@ -4,14 +4,14 @@
     "name": "linceo-install",
     "instanceNameFormat": "linceo install: $(categories)",
     "friendlyName": "linceo install",
-    "description": "Instala en el agente, sin Docker, las herramientas que linceo orquesta para las categorías elegidas (gitleaks, trivy, checkov) y uv, que linceo-scan en modo pypi usa para crear el entorno de linceo mismo. Todo verificado contra un checksum publicado.",
+    "description": "Instala en el agente, sin Docker, las herramientas que linceo orquesta para las categorías elegidas (gitleaks, trivy, checkov) y uv, que linceo-scan en modo pypi usa para crear el entorno de linceo mismo. Los binarios se verifican contra un checksum publicado; checkov, contra el índice de PyPI. Sólo agentes Linux.",
     "helpMarkDown": "[Documentación de linceo](https://github.com/jdiegoisaza/linceo) — ver ADR-000 §12 de esta extensión para el diseño completo de esta tarea.",
     "category": "Utility",
     "author": "juandiego-13",
     "version": {
         "Major": 0,
         "Minor": 2,
-        "Patch": 0
+        "Patch": 1
     },
     "inputs": [
         {
@@ -25,7 +25,7 @@
                 "sca": "sca (instala trivy, con su base de datos de vulnerabilidades)",
                 "iac": "iac (instala checkov)"
             },
-            "helpMarkDown": "Una entrada por cada categoría que luego vayas a escanear con linceo-scan en modo pypi. El mapeo categoría→herramienta es fijo (secrets→gitleaks, sca→trivy, iac→checkov) y es el mismo que usa linceo internamente — no un detalle que esta tarea decida."
+            "helpMarkDown": "Una entrada por cada categoría que luego vayas a escanear con linceo-scan en modo pypi. El mapeo categoría→herramienta es fijo (secrets→gitleaks, sca→trivy, iac→checkov) y es el mismo que usa linceo internamente — no un detalle que esta tarea decida. uv se instala siempre, sin importar las categorías elegidas."
         },
         {
             "name": "gitleaksVersion",
@@ -88,7 +88,7 @@
             "defaultValue": "",
             "required": false,
             "groupName": "overrides",
-            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión. checkov se instala vía pip, que ya verifica el paquete contra el índice de PyPI — no necesita un checksum acompañante."
+            "helpMarkDown": "Vacío usa la versión pinneada por esta versión de la extensión. checkov se instala con uv (uv venv + uv pip install) en un venv propio — no requiere python3 ni el paquete python3-venv en el agente — y el índice de PyPI ya verifica el paquete — no necesita un checksum acompañante."
         },
         {
             "name": "uvVersion",

@@ -4,14 +4,14 @@
     "name": "linceo-scan",
     "instanceNameFormat": "linceo scan: $(category)",
     "friendlyName": "linceo scan",
-    "description": "Ejecuta un escaneo de linceo (secrets, sca o iac) usando la imagen de contenedor oficial ghcr.io/jdiegoisaza/linceo.",
+    "description": "Ejecuta un escaneo de linceo (secrets, sca o iac), en un contenedor con la imagen oficial ghcr.io/jdiegoisaza/linceo o directamente en el agente Linux instalando linceo desde PyPI, según el modo de ejecución.",
     "helpMarkDown": "[Documentación de linceo](https://github.com/jdiegoisaza/linceo)",
     "category": "Utility",
     "author": "juandiego-13",
     "version": {
         "Major": 0,
         "Minor": 5,
-        "Patch": 0
+        "Patch": 1
     },
     "inputs": [
         {
@@ -37,7 +37,7 @@
                 "container": "container (docker run, gitleaks/trivy/checkov incluidos)",
                 "pypi": "pypi (asume gitleaks/trivy/checkov/uv ya en el PATH — ver la tarea linceo-install)"
             },
-            "helpMarkDown": "No existe 'auto' (ADR-000 §4.2/§12.5): los dos modos pueden dar veredictos distintos sobre el mismo repositorio, y degradar de uno a otro en silencio cambiaría el resultado del escaneo sin que cambiara la configuración del pipeline. 'pypi' no instala gitleaks/trivy/checkov — ejecuta la tarea linceo-install, en el mismo job, antes que este paso."
+            "helpMarkDown": "No existe 'auto' (ADR-000 §4.2/§12.5): los dos modos pueden dar veredictos distintos sobre el mismo repositorio, y degradar de uno a otro en silencio cambiaría el resultado del escaneo sin que cambiara la configuración del pipeline. 'container' requiere docker en el agente. 'pypi' sólo funciona en agentes Linux y no instala gitleaks/trivy/checkov — ejecuta la tarea linceo-install, en el mismo job, antes que este paso."
         },
         {
             "name": "path",

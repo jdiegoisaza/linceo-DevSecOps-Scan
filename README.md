@@ -52,6 +52,14 @@ cada tag.
 
 ## Antes de publicar
 
+- **Verificar tras publicar `properties.name`.** Las contribuciones de `vss-extension.json` apuntan
+  a `tasks/<tarea>/dist` (para que tfx ≥ 0.24 valide el `task.json` compilado y no el fuente; ver
+  `docs/PUBLISHING.md`). Que ese campo se pueda cambiar sin romper instalaciones existentes se
+  dedujo de la documentación de Microsoft, **no está confirmado empíricamente**. Tras la primera
+  publicación con este cambio, en una organización con la extensión ya instalada: (1) comprobar
+  que `linceo-scan` y `linceo-install` siguen apareciendo en el catálogo de tareas, y (2) correr un
+  pipeline existente que use `linceo-scan@0` y comprobar que resuelve.
+
 - **`publisher`** en `vss-extension.json` debe ser el ID de publisher real de Marketplace.
 - **`static/logo.png`**, **`tasks/linceo-scan/icon.png`** y **`tasks/linceo-install/icon.png`**
   son los íconos genéricos de la plantilla — reemplazarlos antes de publicar.
@@ -102,7 +110,7 @@ el PATH del agente. `linceo-install` es quien los prepara, sin Docker:
 | `categories` | multiSelect (`secrets`\|`sca`\|`iac`) | las tres | instala gitleaks/trivy/checkov según la categoría |
 | `gitleaksVersion` / `gitleaksSha256Amd64` / `gitleaksSha256Arm64` | string | vacío (usa el pin) | override de versión — exige los dos checksums |
 | `trivyVersion` / `trivySha256Amd64` / `trivySha256Arm64` | string | vacío (usa el pin) | override de versión — exige los dos checksums |
-| `checkovVersion` | string | vacío (usa el pin) | override de versión (sin checksum: pip ya verifica contra PyPI) |
+| `checkovVersion` | string | vacío (usa el pin) | override de versión (sin checksum: PyPI ya verifica el paquete; se instala con `uv`) |
 | `uvVersion` / `uvSha256Amd64` / `uvSha256Arm64` | string | vacío (usa el pin) | override de versión — exige los dos checksums |
 
 Puntos no obvios:
