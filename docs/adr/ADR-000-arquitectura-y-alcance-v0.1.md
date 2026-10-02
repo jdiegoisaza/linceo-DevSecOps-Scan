@@ -955,7 +955,7 @@ propio gate de linceo.
 
 ---
 
-### Enmienda 2026-10-01 (continuación) — Preflight de versión de Python en modo `pypi`
+### Enmienda 2026-10-01 (continuación) — §12.8 Preflight de versión de Python en modo `pypi`
 
 **Problema real, encontrado por un usuario, no en diseño:** en un agente con `python3` apuntando
 a Python 3.8 (el default de sistema en varias imágenes Ubuntu LTS ampliamente usadas en agentes
@@ -1036,5 +1036,160 @@ El fichero `tasks/linceo-scan/linceo-pins.json` se documenta en el README junto 
 inputs de modo `pypi`, con la misma frase que ya usa el resto del documento para una limitación
 de plataforma aceptada, no un pendiente: **Python 3.11+ en el agente es un requisito del modo
 `pypi`, con `executionMode: container` como alternativa donde no esté disponible.**
+
+> **Superseded por §12.9.** Esta subsección completa (búsqueda de intérprete por versión y por
+> capacidad de `ensurepip`) quedó obsoleta un día después: `uv` resuelve las dos cosas por su
+> cuenta, sin que esta tarea tenga que reimplementar ninguna. El código que describe ya no existe
+> en `tasks/linceo-scan/src/index.ts` — se deja el texto como registro de por qué existió y por
+> qué se borró, no como comportamiento vigente.
+
+---
+
+### Enmienda 2026-10-01 (continuación) — `uv` reemplaza `python -m venv`
+
+**Motivo:** el preflight de la enmienda anterior convertía el fallo en un mensaje accionable,
+pero seguía exigiendo que alguien instalara `python3.X-venv` a mano en cada agente nuevo — el
+preflight diagnostica bien el problema de Debian/Ubuntu, pero no lo elimina. `uv` (astral-sh/uv)
+crea entornos sin pasar por `ensurepip`, es un binario estático que se descarga y verifica igual
+que gitleaks y trivy, y linceo ya lo usa y pinea en su propio Dockerfile (`ARG UV_VERSION`) para
+construirse a sí mismo.
+
+**Verificado empíricamente antes de diseñar nada, no asumido de la documentación de `uv`** (los
+tres experimentos corrieron contra binarios reales, no simulados):
+
+1. `uv venv --python /usr/bin/python3` (ese mismo intérprete 3.12 sin `ensurepip`, el que
+   reproduce el bug reportado) crea el entorno sin tropezar — `uv` no instala pip dentro del venv,
+   instala paquetes él mismo con `uv pip install`, así que `ensurepip` nunca entra en juego.
+2. Con el PATH vaciado de cualquier intérprete de sistema, `uv venv --python ">=3.11"` descarga un
+   Python 3.14 autocontenido (`python-build-standalone`) y crea el entorno igual.
+3. `uv pip install --python <venv>/bin/python "linceo[remote-config]==0.9.1"` instala linceo real
+   desde PyPI en ese venv, sin que exista un `pip` dentro de él.
+
+Las tres pruebas se repitieron de punta a punta contra el `dist/index.js` compilado real de
+`linceo-scan`, no contra una reimplementación de prueba, incluyendo una corrida con el `python3`
+3.12 real (sin `ensurepip`) todavía primero en el PATH — `uv` lo descartó por su cuenta a favor de
+un `python3.13` también presente, sin que esta tarea tuviera que buscar ni decidir nada.
+
+#### §12.9.1 Quién descarga `uv`
+
+**Decisión: `linceo-install`, con el mismo mecanismo de checksum y caché que ya usa para
+gitleaks/trivy/checkov (§12.1–§12.4), extendido — no un segundo mecanismo en `linceo-scan`.**
+
+Un segundo mecanismo de descarga sería peor por el motivo exacto que el ADR ya viene repitiendo
+desde §2: dos sitios donde la misma pregunta ("¿cómo se descarga y verifica un binario externo?")
+tiene una respuesta cada uno es, por construcción, dos respuestas que pueden divergir. `linceo-
+install` ya resuelve exactamente ese problema; `uv` es, para efectos de este mecanismo, un cuarto
+binario con la misma forma que los otros tres (tarball de GitHub release, checksum publicado,
+versión fijada) — la única diferencia real es de detalle de extracción (el tarball de `uv` deja el
+binario en un subdirectorio con el nombre del triple de plataforma, no en la raíz como gitleaks/
+trivy), absorbida en el mismo `ensureGithubReleaseBinary` con un campo `archiveDir` opcional.
+
+**Consecuencia que había que aceptar y se acepta explícitamente:** el modo `pypi` pasa a depender
+de que `linceo-install` esté en el pipeline **siempre**, no sólo cuando se van a instalar
+gitleaks/trivy/checkov. A diferencia de esos tres (atados a una categoría de escaneo), `uv` lo
+necesita `linceo-scan` para instalar linceo mismo, sin importar qué categoría se escanee después
+— es la primera herramienta de `linceo-install` que no está condicionada por el input
+`categories`.
+
+#### §12.9.2 Versión y checksum
+
+**Decisión: anclado igual que el resto — versión exacta en `tasks/linceo-install/tool-pins.json`,
+checksums por arquitectura copiados del release oficial, verificados antes de usar, nunca
+calculados sobre lo descargado.**
+
+La versión (`0.12.15`) se toma de la misma autoridad externa que gitleaks/trivy/checkov: el
+`ARG UV_VERSION` del Dockerfile de linceo — una sola fuente de la que copiar, vigilada por la
+misma comprobación de deriva de §12.7, extendida para comparar también este `ARG`. Los checksums
+se copiaron de los ficheros `.sha256` que el propio release de `uv` publica por asset
+(`uv-x86_64-unknown-linux-gnu.tar.gz.sha256`, `uv-aarch64-unknown-linux-gnu.tar.gz.sha256`) —
+verificados descargando ambos binarios y comprobando el checksum contra el valor vendorizado antes
+de escribir nada en `tool-pins.json`.
+
+**Límite honesto, no cerrado por completo:** a diferencia de gitleaks/trivy, el Dockerfile de
+linceo no embebe un checksum de `uv` (lo instala vía `pip install uv==…`, confiando en PyPI, no en
+un binario verificado — ver el propio comentario de esa etapa del Dockerfile). La comprobación de
+deriva programada, por tanto, sólo puede vigilar la **versión** de `uv` contra ese `ARG`, no su
+checksum contra una fuente externa de la misma forma que hace con gitleaks/trivy. La verificación
+del checksum de `uv` sigue existiendo igual de fuerte que la de los demás — ocurre en cada corrida
+real de `linceo-install`, que nunca instala un binario sin verificarlo —, simplemente no hay una
+segunda fuente externa contra la que contrastarlo de forma proactiva y programada.
+
+#### §12.9.3 Si ya está en el PATH
+
+**Decisión: el mismo criterio que el resto — `preferPinned`, sin input, sin reutilizar lo
+preexistente. `uv` no es distinto.**
+
+La tentación de tratarlo distinto viene de que `uv`, a diferencia de gitleaks/trivy/checkov, no
+afecta el veredicto de un escaneo — es plomería, igual que "qué Python arranca el venv" lo era en
+la enmienda anterior. Pero hay una diferencia real con ese caso: el intérprete de Python nunca lo
+instala esta tarea (sólo busca uno que ya esté), mientras que `uv` sí es algo que `linceo-install`
+instala activamente — está, por definición, dentro del conjunto de cosas que esta tarea gestiona,
+no en el conjunto de hechos del entorno que sólo puede descubrir. Introducir una segunda regla de
+reutilización aquí reabriría exactamente la puerta que §12.4 cerró para los otros tres: un modo
+adicional que mantener, documentar y que alguien tiene que recordar que existe. Una sola regla,
+sin excepciones, es más simple que una regla con una excepción justificada caso por caso — y el
+costo de no reutilizar es mínimo: un binario de ~15 MB que, igual que los demás, se cachea después
+de la primera vez.
+
+#### §12.9.4 Qué desaparece: el preflight de versión de Python
+
+**Sí, desaparece por completo — confirmado empíricamente, no sólo argumentado.** `uv venv
+--python "<requires-python>"` acepta el mismo formato de rango que linceo ya declara en su
+`pyproject.toml` (`>=3.11`) tal cual, sin que esta tarea lo interprete, y resuelve internamente
+las dos preguntas que el preflight anterior resolvía a mano:
+
+1. ¿Hay un intérprete que cumpla la versión? `uv` lo busca él mismo entre los disponibles.
+2. ¿Puede ese intérprete crear un venv utilizable? Siempre sí, porque `uv` no depende de
+   `ensurepip` para instalar paquetes — el problema de Debian/Ubuntu deja de existir, no se
+   detecta y se reporta mejor.
+
+**Código eliminado de `tasks/linceo-scan/src/index.ts`, no dejado al lado:** `PythonVersion`,
+`detectPythonVersion`, `pythonVersionSatisfies`, `debianVenvPackageName`,
+`detectEnsurepipAvailable`, `RejectedCandidate`, `resolvePythonInterpreter`, y la red de seguridad
+de `ensureLinceoBinary` que inspeccionaba la salida de `python -m venv` buscando el mensaje de
+`ensurepip`. Dejarlo "por si acaso" sería mantener una segunda implementación de algo que `uv` ya
+hace, con su propio riesgo de desviarse — el mismo argumento de §12.9.1 contra un segundo
+mecanismo de descarga, aplicado aquí a un segundo mecanismo de resolución de intérprete.
+
+**Lo que no desaparece:** `tasks/linceo-scan/linceo-pins.json` sigue siendo necesario — sigue
+siendo la única fuente de verdad de qué versión de Python requiere linceo, vigilada por la misma
+comprobación de deriva de §12.7/§12.8. Lo único que cambia es su destino: antes alimentaba un
+comparador propio, ahora se pasa literal a `uv venv --python`.
+
+**Caché del Python que `uv` pueda descargar:** `linceo-install`, al asegurar `uv`, fija
+`UV_PYTHON_INSTALL_DIR` y `UV_CACHE_DIR` bajo `Agent.ToolsDirectory` (mismo argumento que
+`TRIVY_CACHE_DIR`, §12.5) — sin esto, un agente que necesite que `uv` descargue un Python
+autocontenido lo repetiría en cada corrida, el mismo desperdicio que la caché de herramientas
+existe para evitar.
+
+#### §12.9.5 Si `uv` no está disponible: falla, no cae a `python -m venv`
+
+**Decisión: `linceo-scan` falla con un mensaje accionable si `uv` no está en el PATH. No hay
+fallback al mecanismo de `python -m venv` que existía antes de esta enmienda.**
+
+Mismo argumento que dos decisiones ya tomadas en este documento:
+
+- **§4.2 (`executionMode` sin `auto`):** degradar en silencio a un mecanismo distinto cambia el
+  comportamiento sin que cambie la configuración del pipeline.
+- **§12.4 (`preferPinned` sin `reuseIfPresent`):** una vía alternativa "por si acaso" es una
+  segunda superficie que mantener y que alguien tiene que acordarse de que existe.
+
+Aquí el argumento es más fuerte todavía: la vía alternativa no es sólo una superficie adicional,
+es **el mecanismo que esta misma enmienda demostró que tiene un bug de plataforma conocido**
+(Debian/Ubuntu + `ensurepip`). Mantenerlo vivo como fallback silencioso significaría que el bug
+que motivó todo este trabajo puede seguir ocurriendo, ahora de forma más difícil de diagnosticar
+porque ya no es el camino principal. La ausencia de `uv` en el PATH es, en la práctica, una señal
+de que falta el paso `linceo-install` en el job — un error de configuración del pipeline, no una
+situación que el modo `pypi` deba absorber en silencio degradando a algo peor.
+
+#### §12.9.6 Resumen de lo que cambia
+
+| Antes (enmienda anterior) | Ahora |
+|---|---|
+| `python -m venv` | `uv venv --python "<requires-python>"` |
+| `pip install` dentro del venv | `uv pip install --python <venv>/bin/python` |
+| Preflight propio de versión + búsqueda por capacidad de `ensurepip` | Delegado por completo a `uv` |
+| Requisito del agente: Python 3.11+ en el PATH | Requisito del agente: `uv` en el PATH (vía `linceo-install`) — Python puede faltar del todo |
+| `linceo-install` necesario sólo si se usan sus categorías | `linceo-install` necesario siempre que `executionMode: pypi`, para cualquier categoría |
 
 ---

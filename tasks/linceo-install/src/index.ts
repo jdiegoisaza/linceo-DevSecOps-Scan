@@ -26,6 +26,7 @@ interface ToolPins {
     gitleaks: GithubBinaryPin;
     trivy: GithubBinaryPin;
     checkov: CheckovPin;
+    uv: GithubBinaryPin;
 }
 
 const TOOL_PINS: ToolPins = JSON.parse(fs.readFileSync(path.join(__dirname, 'tool-pins.json'), 'utf8'));
@@ -87,12 +88,20 @@ function resolveVersion(inputName: string, pinnedVersion: string): string {
 }
 
 interface GithubReleaseSpec {
-    toolName: 'gitleaks' | 'trivy';
+    toolName: 'gitleaks' | 'trivy' | 'uv';
     binaryName: string;
     version: string;
     expectedSha256: string;
     assetName: string;
     downloadUrl: string;
+    /**
+     * Subdirectorio dentro del tar donde vive el binario, cuando el
+     * release no lo deja en la raíz del archivo (caso de uv: el tarball
+     * contiene "uv-<triple>/uv", no "uv" a secas, confirmado extrayendo
+     * el tarball real). Ausente para gitleaks/trivy, que sí lo dejan en
+     * la raíz.
+     */
+    archiveDir?: string;
 }
 
 /**
@@ -170,6 +179,43 @@ function buildTrivySpec(releaseArch: ReleaseArch): GithubReleaseSpec {
 }
 
 /**
+ * uv no es una herramienta que linceo orqueste (ADR-000 §12.9) — se
+ * instala porque linceo-scan en modo pypi la usa para crear el venv de
+ * linceo mismo, sin depender de "ensurepip" (ADR-000 §12.9, que reemplaza
+ * el preflight de versión de Python que existía antes de este hallazgo).
+ * Se ancla a la misma versión que el Dockerfile de linceo ya usa para
+ * construirse a sí mismo (ARG UV_VERSION) — una sola autoridad externa,
+ * igual que gitleaks/trivy/checkov.
+ *
+ * Tag del release sin prefijo "v" (a diferencia de gitleaks/trivy) y
+ * nombre de asset con el triple de la plataforma — confirmado contra el
+ * release real 0.12.15 en github.com/astral-sh/uv, no asumido.
+ */
+function buildUvSpec(releaseArch: ReleaseArch): GithubReleaseSpec {
+    const version = resolveVersion('uvVersion', TOOL_PINS.uv.version);
+    const expectedSha256 = resolveGithubBinaryChecksum(
+        'uv',
+        version,
+        TOOL_PINS.uv,
+        releaseArch,
+        'uvSha256Amd64',
+        'uvSha256Arm64'
+    );
+    const targetTriple = releaseArch === 'amd64' ? 'x86_64-unknown-linux-gnu' : 'aarch64-unknown-linux-gnu';
+    const archiveDir = `uv-${targetTriple}`;
+    const assetName = `${archiveDir}.tar.gz`;
+    return {
+        toolName: 'uv',
+        binaryName: 'uv',
+        version,
+        expectedSha256,
+        assetName,
+        downloadUrl: `https://github.com/astral-sh/uv/releases/download/${version}/${assetName}`,
+        archiveDir,
+    };
+}
+
+/**
  * Asegura un binario pinneado de GitHub release en el PATH del job.
  *
  * Único modo, sin input (ADR-000 §12.4): nunca toca ni desinstala lo que
@@ -205,9 +251,10 @@ async function ensureGithubReleaseBinary(spec: GithubReleaseSpec, cacheArch: str
     console.log(`${spec.toolName} ${spec.version}: checksum verificado (${actualSha256}).`);
 
     const extractedDir = await toolLib.extractTar(downloadedFile);
-    fs.chmodSync(path.join(extractedDir, spec.binaryName), 0o755);
+    const binaryDir = spec.archiveDir ? path.join(extractedDir, spec.archiveDir) : extractedDir;
+    fs.chmodSync(path.join(binaryDir, spec.binaryName), 0o755);
 
-    const cachedDir = await toolLib.cacheDir(extractedDir, spec.toolName, spec.version, cacheArch);
+    const cachedDir = await toolLib.cacheDir(binaryDir, spec.toolName, spec.version, cacheArch);
     toolLib.prependPath(cachedDir);
     console.log(`${spec.toolName} ${spec.version}: instalado y cacheado en ${cachedDir}.`);
 }
@@ -286,6 +333,27 @@ async function ensureTrivyVulnerabilityDatabase(trivyVersion: string): Promise<v
     console.log(`Base de datos de trivy cacheada en ${cachedDir} y expuesta como TRIVY_CACHE_DIR.`);
 }
 
+/**
+ * uv guarda sus propias descargas (Python autocontenido cuando no hay uno
+ * que sirva en el PATH, y su caché de paquetes) en rutas que, por
+ * defecto, no sobreviven entre jobs si no se les dice dónde vivir — el
+ * mismo problema que esta tarea ya resuelve para sus binarios, ahora
+ * aplicado a lo que uv pueda necesitar descargar él mismo más adelante
+ * (en linceo-scan, no aquí). Se exponen como variables de pipeline para
+ * que cualquier `uv` invocado después, en el mismo job, las herede sin
+ * configuración adicional — uv las lee de su propio entorno de proceso.
+ */
+function configureUvCaching(): void {
+    const toolsDirectory = tl.getVariable('Agent.ToolsDirectory') ?? '';
+    const pythonInstallDir = path.join(toolsDirectory, 'uv-python');
+    const cacheDir = path.join(toolsDirectory, 'uv-cache');
+    tl.mkdirP(pythonInstallDir);
+    tl.mkdirP(cacheDir);
+    tl.setVariable('UV_PYTHON_INSTALL_DIR', pythonInstallDir);
+    tl.setVariable('UV_CACHE_DIR', cacheDir);
+    console.log(`uv: UV_PYTHON_INSTALL_DIR=${pythonInstallDir}, UV_CACHE_DIR=${cacheDir} (persisten entre jobs del mismo agente, igual que el resto de la caché de esta tarea).`);
+}
+
 async function run(): Promise<void> {
     try {
         verifyLinux();
@@ -294,6 +362,14 @@ async function run(): Promise<void> {
         // (os.arch(): 'x64'|'arm64') — se pasa explícito para que la
         // clave de caché quede a la vista, no implícita en un default.
         const cacheArch = os.arch();
+
+        // uv no está condicionado por "categories": a diferencia de
+        // gitleaks/trivy/checkov (atados a una categoría de escaneo),
+        // uv lo necesita linceo-scan en modo pypi para instalar linceo
+        // mismo, sin importar qué categoría se vaya a escanear después
+        // (ADR-000 §12.9).
+        await ensureGithubReleaseBinary(buildUvSpec(releaseArch), cacheArch);
+        configureUvCaching();
 
         const categories = tl.getDelimitedInput('categories', ',', true);
         const tools = new Set(
@@ -331,7 +407,7 @@ async function run(): Promise<void> {
 
         tl.setResult(
             tl.TaskResult.Succeeded,
-            `linceo-install: preparadas las categorías ${categories.join(', ')} para ejecutar linceo en modo pypi.`
+            `linceo-install: uv listo y preparadas las categorías ${categories.join(', ')} para ejecutar linceo en modo pypi.`
         );
     } catch (err) {
         const message = err instanceof Error ? err.message : 'Error desconocido';

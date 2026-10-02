@@ -1,7 +1,12 @@
 // Comprueba que los valores que esta extensión copió de linceo —
-// versiones/checksums de herramientas en tasks/linceo-install/tool-pins.json,
-// y el mínimo de Python en tasks/linceo-scan/linceo-pins.json— siguen
-// coincidiendo con el release más reciente de linceo (ADR-000 §12.7/§12.8).
+// versiones/checksums de gitleaks/trivy/checkov/uv en
+// tasks/linceo-install/tool-pins.json, y el mínimo de Python en
+// tasks/linceo-scan/linceo-pins.json— siguen coincidiendo con el release
+// más reciente de linceo (ADR-000 §12.7/§12.8/§12.9.2). La versión de uv
+// se compara contra el ARG UV_VERSION del Dockerfile, igual que las otras
+// tres; su checksum no vive ahí (el Dockerfile instala uv vía pip, no por
+// binario verificado), así que esta comprobación no puede vigilarlo de
+// forma proactiva — sólo la descarga real de linceo-install lo verifica.
 // No sustituye la verificación de checksum contra una descarga real (eso
 // detecta un error de transcripción); esto detecta que linceo cambió algo
 // y el pin de esta extensión se quedó atrás — lo que aquella verificación,
@@ -124,6 +129,7 @@ async function main() {
         trivySha256Amd64: extractArg(dockerfile, 'TRIVY_SHA256_AMD64'),
         trivySha256Arm64: extractArg(dockerfile, 'TRIVY_SHA256_ARM64'),
         checkovVersion: extractArg(dockerfile, 'CHECKOV_VERSION'),
+        uvVersion: extractArg(dockerfile, 'UV_VERSION'),
         pythonRequires: extractRequiresPython(pyproject),
     };
 
@@ -145,6 +151,7 @@ async function main() {
         trivySha256Amd64: toolPins.trivy.sha256.amd64,
         trivySha256Arm64: toolPins.trivy.sha256.arm64,
         checkovVersion: toolPins.checkov.version,
+        uvVersion: toolPins.uv.version,
         pythonRequires: linceoPins.python.requires,
     };
 

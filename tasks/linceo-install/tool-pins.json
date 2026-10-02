@@ -1,5 +1,5 @@
 {
-    "_comment": "Valores copiados literalmente de los ARG del Dockerfile de linceo (https://github.com/jdiegoisaza/linceo). Nunca calculados aquí. Actualizar este fichero es un cambio de contrato de esta extensión (ADR-000 §7.4/§12.2) y debe acompañarse de un bump de versión. La comprobación de deriva contra el release más reciente corre en azure-pipelines-tool-pins-check.yml (ADR-000 §12.7); no la sustituye, sólo avisa cuando hace falta actualizarlo a mano.",
+    "_comment": "Valores copiados literalmente de los ARG del Dockerfile de linceo (https://github.com/jdiegoisaza/linceo). Nunca calculados aquí. Actualizar este fichero es un cambio de contrato de esta extensión (ADR-000 §7.4/§12.2) y debe acompañarse de un bump de versión. La comprobación de deriva contra el release más reciente corre en azure-pipelines-linceo-pins-check.yml (ADR-000 §12.7); no la sustituye, sólo avisa cuando hace falta actualizarlo a mano. 'uv' no es una herramienta que linceo orqueste (no aparece en doctor.py) — se instala igual porque linceo-scan en modo pypi lo usa para crear el venv de linceo mismo (ADR §12.9), y su versión se ancla a la misma que el Dockerfile de linceo ya usa para construirse a sí mismo (ARG UV_VERSION), por la misma razón que gitleaks/trivy/checkov: una sola autoridad externa de la que copiar, nunca inventada aquí.",
     "source": {
         "repository": "https://github.com/jdiegoisaza/linceo",
         "dockerfileRef": "v0.9.1",
@@ -21,5 +21,12 @@
     },
     "checkov": {
         "version": "3.3.19"
+    },
+    "uv": {
+        "version": "0.12.15",
+        "sha256": {
+            "amd64": "f97935763c04be3e692460a7aaeaaab8fc3b78fcf8b389da820b38ae7423a638",
+            "arm64": "0e9a3499b0587d449c9ff684c0160da607826e4af1cee220bc87f378702d3e08"
+        }
     }
 }

@@ -10,8 +10,8 @@
     "author": "juandiego-13",
     "version": {
         "Major": 0,
-        "Minor": 4,
-        "Patch": 1
+        "Minor": 5,
+        "Patch": 0
     },
     "inputs": [
         {
@@ -35,7 +35,7 @@
             "required": true,
             "options": {
                 "container": "container (docker run, gitleaks/trivy/checkov incluidos)",
-                "pypi": "pypi (asume gitleaks/trivy/checkov ya en el PATH — ver la tarea linceo-install)"
+                "pypi": "pypi (asume gitleaks/trivy/checkov/uv ya en el PATH — ver la tarea linceo-install)"
             },
             "helpMarkDown": "No existe 'auto' (ADR-000 §4.2/§12.5): los dos modos pueden dar veredictos distintos sobre el mismo repositorio, y degradar de uno a otro en silencio cambiaría el resultado del escaneo sin que cambiara la configuración del pipeline. 'pypi' no instala gitleaks/trivy/checkov — ejecuta la tarea linceo-install, en el mismo job, antes que este paso."
         },
@@ -71,7 +71,7 @@
             "defaultValue": "0.9.1",
             "required": true,
             "visibleRule": "executionMode = pypi",
-            "helpMarkDown": "Versión exacta de 'linceo[remote-config]' a instalar vía pip en un venv efímero (ADR-000 §4.5) — nunca 'latest'. Es un pin independiente de 'Versión de la imagen de linceo': hoy coinciden numéricamente porque ambos se derivan del mismo tag de release, pero son dos inputs separados a propósito, no uno reutilizado con otro significado. Si ya hay un 'linceo' resoluble en el PATH del agente, se usa ese y no se instala nada."
+            "helpMarkDown": "Versión exacta de 'linceo[remote-config]' a instalar con 'uv pip install' en un venv efímero creado con 'uv venv' (ADR-000 §4.5/§12.9) — nunca 'latest'. Requiere 'uv' en el PATH del agente (instalado por la tarea linceo-install); no hay fallback a 'python -m venv'. Es un pin independiente de 'Versión de la imagen de linceo': hoy coinciden numéricamente porque ambos se derivan del mismo tag de release, pero son dos inputs separados a propósito, no uno reutilizado con otro significado. Si ya hay un 'linceo' resoluble en el PATH del agente, se usa ese y no se instala nada ni se necesita uv."
         },
         {
             "name": "onGateFailure",
