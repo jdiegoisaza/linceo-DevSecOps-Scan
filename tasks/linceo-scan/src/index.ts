@@ -342,30 +342,66 @@ function pythonVersionSatisfies(version: PythonVersion, requires: string): boole
 }
 
 /**
+ * Nombre del paquete apt que provee "ensurepip" para un intérprete dado —
+ * convención real de Debian/Ubuntu (confirmado contra el mensaje que el
+ * propio `python -m venv` imprime: "apt install python3.12-venv" para un
+ * 3.12), derivado de la versión detectada, nunca inventado a mano.
+ */
+function debianVenvPackageName(version: PythonVersion): string {
+    return `python${version[0]}.${version[1]}-venv`;
+}
+
+/**
+ * Prueba barata y sin efectos secundarios de si este intérprete podría
+ * crear un venv con pip incluido (el modo por defecto, el único que esta
+ * tarea usa) — sin llegar a crear nada en disco. Debian/Ubuntu empaquetan
+ * "ensurepip" aparte del intérprete (paquete "python3.<minor>-venv"); sin
+ * él, `python -m venv` sólo falla al intentar arrancar pip DENTRO del
+ * entorno que ya creó, con un mensaje de Python que `ToolRunner` no eleva
+ * más allá de "the process ... failed with exit code 1" — la causa real,
+ * enterrada, que este preflight existe para sacar a la luz antes de
+ * gastar siquiera el intento (reproducido y verificado contra un
+ * intérprete real sin este módulo, no asumido de la documentación).
+ */
+function detectEnsurepipAvailable(pythonPath: string): boolean {
+    return tl.tool(pythonPath).arg(['-c', 'import ensurepip']).execSync().code === 0;
+}
+
+interface RejectedCandidate {
+    name: string;
+    version: PythonVersion;
+    reason: 'too-old' | 'no-venv';
+}
+
+/**
  * Busca un intérprete de Python que cumpla el mínimo que linceo declara
- * en su propio pyproject.toml (vendorizado en linceo-pins.json). Sin
- * esto, un agente con "python3" apuntando a un Python viejo (p. ej. el
- * 3.8 de sistema de muchas imágenes Ubuntu LTS) falla en pip con
- * "Could not find a version that satisfies the requirement ... (from
- * versions: none)" — un mensaje que no nombra la causa real
- * (requires-python no cumplido) y que nadie va a deducir sin leer el
- * código de linceo.
+ * en su propio pyproject.toml (vendorizado en linceo-pins.json) Y que
+ * pueda crear un venv con pip incluido. Sin lo primero, un agente con
+ * "python3" apuntando a un Python viejo (p. ej. el 3.8 de sistema de
+ * muchas imágenes Ubuntu LTS) falla en pip con "Could not find a version
+ * that satisfies the requirement ... (from versions: none)"; sin lo
+ * segundo, falla al crear el venv con un "exit code 1" que no dice que
+ * falta "ensurepip". Dos causas reales distintas, los dos mensajes
+ * igual de inútiles sin este preflight — y nadie va a deducir ninguna
+ * de las dos sin leer el código de linceo o de Python.
  *
- * No se rinde con el primer "python3" que encuentra: en un agente con
- * varios intérpretes instalados uno junto a otro (python3 -> 3.8 del
- * sistema, python3.12 instalado aparte para otro propósito) rendirse ahí
- * sería innecesariamente estricto — nadie configuró mal nada, sólo hay
- * más de un intérprete, y uno de ellos ya sirve. Es una búsqueda segura
- * de hacer: a diferencia de executionMode (que si cambia, cambia el
- * resultado del escaneo, ADR §4.2), qué Python arranca el venv es un
- * detalle de plomería que no toca qué versión de linceo/gitleaks/trivy/
- * checkov corre después — doctor sigue validando eso igual.
+ * No se rinde con el primer "python3" que encuentra, por ninguno de los
+ * dos motivos: en un agente con varios intérpretes instalados uno junto a
+ * otro (python3 -> 3.8 del sistema, python3.12 instalado aparte sin
+ * "python3.12-venv", python3.11 con todo completo) rendirse en el primer
+ * tropiezo sería innecesariamente estricto — nadie configuró mal nada,
+ * sólo hay más de un intérprete, y uno de ellos ya sirve del todo. Es una
+ * búsqueda segura de hacer: a diferencia de executionMode (que si cambia,
+ * cambia el resultado del escaneo, ADR §4.2), qué Python arranca el venv
+ * es un detalle de plomería que no toca qué versión de linceo/gitleaks/
+ * trivy/checkov corre después — doctor sigue validando eso igual.
  *
- * Orden: "python3" primero (el caso común; si ya sirve, cero sorpresas),
- * luego "python3.<minor>" ascendente desde el mínimo requerido. Nunca
- * prueba una versión por debajo del mínimo, nunca un nombre arbitrario
- * fuera de esta convención. El intérprete elegido se nombra en el log,
- * nunca en silencio.
+ * Orden: "python3" primero (el caso común; si ya sirve del todo, cero
+ * sorpresas), luego "python3.<minor>" ascendente desde el mínimo
+ * requerido. Nunca prueba una versión por debajo del mínimo, nunca un
+ * nombre arbitrario fuera de esta convención. El intérprete elegido se
+ * nombra en el log, nunca en silencio — igual que cada candidato
+ * descartado y el motivo exacto del descarte.
  */
 function resolvePythonInterpreter(pythonRequires: string): { path: string; version: PythonVersion } {
     const match = pythonRequires.trim().match(/^>=(\d+)\.(\d+)/);
@@ -375,27 +411,62 @@ function resolvePythonInterpreter(pythonRequires: string): { path: string; versi
     const [minMajor, minMinor] = [Number(match[1]), Number(match[2])];
     const candidateNames = ['python3', ...Array.from({ length: 10 }, (_, i) => `python3.${minMinor + i}`)];
 
-    const tried: string[] = [];
+    const rejected: RejectedCandidate[] = [];
     for (const name of candidateNames) {
         const candidatePath = tl.which(name, false);
         if (!candidatePath) {
             continue;
         }
         const version = detectPythonVersion(candidatePath);
-        tried.push(`${name} (${version.join('.')})`);
-        if (pythonVersionSatisfies(version, pythonRequires)) {
-            const viaFallback = name !== 'python3';
-            console.log(
-                `Intérprete de Python elegido para el venv de linceo: "${name}" (${candidatePath}, versión ${version.join('.')}).` +
-                (viaFallback
-                    ? ' "python3" no cumplía el mínimo requerido por linceo; se buscó y encontró una alternativa en el PATH.'
-                    : '')
-            );
-            return { path: candidatePath, version };
+
+        if (!pythonVersionSatisfies(version, pythonRequires)) {
+            rejected.push({ name, version, reason: 'too-old' });
+            continue;
         }
+
+        if (!detectEnsurepipAvailable(candidatePath)) {
+            const aptPackage = debianVenvPackageName(version);
+            console.log(
+                `"${name}" (${candidatePath}, versión ${version.join('.')}) cumple la versión requerida, pero no ` +
+                `tiene el módulo "ensurepip" disponible — falta el paquete "${aptPackage}" en este agente ` +
+                '(Debian/Ubuntu empaquetan venv aparte del intérprete). Buscando otro intérprete en el PATH...'
+            );
+            rejected.push({ name, version, reason: 'no-venv' });
+            continue;
+        }
+
+        const viaFallback = name !== 'python3';
+        console.log(
+            `Intérprete de Python elegido para el venv de linceo: "${name}" (${candidatePath}, versión ${version.join('.')}).` +
+            (viaFallback
+                ? ' "python3" no servía (versión insuficiente o sin módulo venv); se buscó y encontró una alternativa en el PATH.'
+                : '')
+        );
+        return { path: candidatePath, version };
     }
 
-    const triedSummary = tried.length > 0 ? tried.join(', ') : 'ninguno de esos nombres resolvió en el PATH';
+    if (rejected.length === 0) {
+        throw new Error(
+            `No se encontró en el PATH ningún intérprete con los nombres esperados (python3, python3.${minMinor}` +
+            `..python3.${minMinor + 9}). Instala Python ${minMajor}.${minMinor}+ en este agente, o usa ` +
+            'executionMode: container, que no depende de Python en el agente.'
+        );
+    }
+
+    const noVenv = rejected.filter(c => c.reason === 'no-venv');
+    if (noVenv.length > 0) {
+        const fixes = noVenv
+            .map(c => `  - ${c.name} (${c.version.join('.')}): sudo apt install ${debianVenvPackageName(c.version)}`)
+            .join('\n');
+        throw new Error(
+            `Se encontraron en el PATH intérpretes con la versión que linceo requiere (${pythonRequires}), pero sin ` +
+            'el módulo "ensurepip" instalado (Debian/Ubuntu empaquetan venv aparte del intérprete):\n' +
+            `${fixes}\n` +
+            'Instala el paquete que falte y reintenta, o usa executionMode: container, que no depende de Python en el agente.'
+        );
+    }
+
+    const triedSummary = rejected.map(c => `${c.name} (${c.version.join('.')})`).join(', ');
     throw new Error(
         `No se encontró en el PATH un intérprete de Python que cumpla el requisito de linceo (${pythonRequires}, ` +
         'tomado de su propio pyproject.toml — ver tasks/linceo-scan/linceo-pins.json). ' +
@@ -432,7 +503,36 @@ async function ensureLinceoBinary(linceoVersion: string, pythonRequires: string)
     const venvDir = path.join(agentTemp, `linceo-scan-venv-${Date.now()}`);
 
     console.log(`linceo no está en el PATH. Instalando linceo[remote-config]==${linceoVersion} en ${venvDir}.`);
-    await tl.tool(python.path).arg(['-m', 'venv', venvDir]).exec();
+
+    // execSync, no exec: el preflight de arriba (detectEnsurepipAvailable)
+    // ya debería garantizar que esto funciona, pero es una prueba barata,
+    // no una creación real — si por lo que sea (p. ej. el módulo está
+    // pero sus wheels internas están corruptas) la creación real sigue
+    // fallando por el mismo motivo, esta red de seguridad inspecciona la
+    // salida real en vez de dejar que ToolRunner la aplaste en un genérico
+    // "the process ... failed with exit code 1", que es exactamente el
+    // síntoma reportado y lo que este bloque existe para no repetir.
+    const venvResult = tl.tool(python.path).arg(['-m', 'venv', venvDir]).execSync();
+    if (venvResult.code !== 0) {
+        const combinedOutput = `${venvResult.stdout}\n${venvResult.stderr}`;
+        // \s+ en vez de espacios literales: el mensaje real de Python
+        // envuelve la frase a 79 columnas ("...is not\navailable...",
+        // verificado contra la salida real de un intérprete sin
+        // ensurepip) — un espacio literal no la habría detectado nunca.
+        if (/ensurepip\s+is\s+not\s+available|No\s+module\s+named\s+['"]?ensurepip/i.test(combinedOutput)) {
+            const aptPackage = debianVenvPackageName(python.version);
+            throw new Error(
+                `"${python.path}" (versión ${python.version.join('.')}) no pudo crear el venv porque falta el ` +
+                `módulo "ensurepip" — instala el paquete "${aptPackage}" en este agente ` +
+                `(Debian/Ubuntu: sudo apt install ${aptPackage}) y reintenta.`
+            );
+        }
+        throw new Error(
+            `No se pudo crear el venv con "${python.path}" (código ${venvResult.code}): ` +
+            (venvResult.stderr.trim() || venvResult.stdout.trim())
+        );
+    }
+
     await tl.tool(path.join(venvDir, 'bin', 'pip')).arg(['install', `linceo[remote-config]==${linceoVersion}`]).exec();
 
     return path.join(venvDir, 'bin', 'linceo');
