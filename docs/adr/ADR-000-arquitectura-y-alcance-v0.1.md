@@ -924,6 +924,9 @@ GitHub, confirmado: `/releases` devuelve `[]`), descarga el `Dockerfile` de ese 
 `raw.githubusercontent.com`, extrae sus `ARG` de versión y checksum, y los compara contra
 `tasks/linceo-install/tool-pins.json`. Si difieren, la comprobación falla — no avisa.**
 
+*(Extendida en §12.8 a un segundo fichero, `tasks/linceo-scan/linceo-pins.json`, y un segundo
+fichero fuente, `pyproject.toml` — mismo script, mismo pipeline, mismo argumento de abajo.)*
+
 **Por qué falla y no avisa, a diferencia de §7.3 (CLI por encima del rango máximo → avisa y
 continúa):** son dos situaciones con la misma forma superficial —"algo está más nuevo de lo que
 pinneamos"— pero distinto costo de fallar. §7.3 avisa porque ese preflight corre en **cada
@@ -940,7 +943,7 @@ comprobación.
 **Por qué es un pipeline separado y no un job del pipeline de build/publish:** si viviera en
 `azure-pipelines.yml`, cada push a `main` se pondría en rojo el día que linceo suba una versión,
 sin relación alguna con el contenido de ese push — el mismo problema que `latest` en §7.1, pero
-en el repositorio equivocado. Un pipeline propio (`azure-pipelines-tool-pins-check.yml`,
+en el repositorio equivocado. Un pipeline propio (`azure-pipelines-linceo-pins-check.yml`,
 programado diariamente) falla sólo esa corrida, con su propio motivo etiquetado, sin tocar el
 semáforo de build/publish.
 
@@ -949,5 +952,89 @@ formato del Dockerfile): también falla, con un mensaje que lo distingue explíc
 "hay deriva" — una comprobación que no pudo correr y queda en verde por defecto es el mismo
 patrón de "pipeline verde que no verificó nada" que el §5 de este documento ya rechaza para el
 propio gate de linceo.
+
+---
+
+### Enmienda 2026-10-01 (continuación) — Preflight de versión de Python en modo `pypi`
+
+**Problema real, encontrado por un usuario, no en diseño:** en un agente con `python3` apuntando
+a Python 3.8 (el default de sistema en varias imágenes Ubuntu LTS ampliamente usadas en agentes
+self-hosted), el modo `pypi` de `linceo-scan` fallaba con:
+
+```
+ERROR: Could not find a version that satisfies the requirement linceo[remote-config]==0.9.1 (from versions: none)
+```
+
+`from versions: none` es pip descartando silenciosamente todas las distribuciones porque el
+intérprete no cumple el `requires-python` que linceo declara (`>=3.11`) — un mensaje que no nombra
+esa causa, y que nadie va a deducir sin leer el código de linceo. Contradice el criterio que el
+resto de esta tarea ya sigue (resolveWorkspacePath, extraArgs, el propio `runDoctorPreflight`):
+si algo está mal, la tarea falla por esa causa explícita, antes de que la herramienta de turno
+reporte un síntoma que apunta a cualquier sitio menos al problema real.
+
+#### Dónde vive el mínimo de Python, y cómo se vigila su deriva
+
+El mínimo (`>=3.11`) está declarado en el `pyproject.toml` de linceo, no en esta extensión.
+Copiarlo a mano en el mensaje de error o en el código de `linceo-scan` crearía una tercera copia
+de un dato ajeno —junto a los checksums de `tasks/linceo-install/tool-pins.json` (§12.2) y al
+rango de compatibilidad del CLI de §7— sin ningún mecanismo que detecte cuándo linceo lo cambia.
+
+**Decisión: el mismo mecanismo que ya existe para los pines de herramientas, extendido.**
+`tasks/linceo-scan/linceo-pins.json` vendoriza `{"python": {"requires": ">=3.11"}}`, copiado
+literalmente del `pyproject.toml` de linceo (verificado contra el tag `v0.9.1`, igual que
+`tool-pins.json`). `scripts/check-linceo-pins-drift.js` (renombrado desde
+`check-tool-pins-drift.js`, mismo pipeline programado de §12.7) ahora descarga **dos** ficheros
+del tag más reciente de linceo —`Dockerfile` y `pyproject.toml`— y compara **ambos** ficheros de
+pins locales contra lo que encuentra, con el mismo criterio de fallo (nunca aviso) y el mismo
+argumento de §12.7: la comprobación corre en el CI de esta extensión, nunca en el pipeline de un
+usuario, así que fallar aquí no tiene el costo que hace que §7.3 prefiera avisar.
+
+No se creó un tercer pipeline ni un segundo script: es la misma pregunta —"¿lo que vendorizamos de
+linceo sigue vigente?"— aplicada a un segundo dato, no un problema nuevo.
+
+#### Preflight: falla antes del `pip install`, con causa propia
+
+`ensureLinceoBinary` (sólo en la rama donde no hay ya un `linceo` en el PATH — si lo hay, no se
+toca Python en absoluto, §4.5) corre `resolvePythonInterpreter` antes de crear el venv. El
+intérprete candidato se interroga directamente (`python -c "import sys; ..."`), no se parsea el
+texto de `--version`. Si nada cumple el mínimo, la tarea falla nombrando la versión encontrada,
+la mínima requerida (con su fuente: "tomado de su propio pyproject.toml"), y qué hacer —instalar
+una versión que cumpla, o usar `executionMode: container`, que no depende de Python en el agente.
+
+#### Buscar un intérprete alternativo antes de rendirse
+
+**Problema:** un agente con varios intérpretes instalados uno junto a otro —`python3` apuntando
+al 3.8 de sistema, `python3.12` instalado aparte para otro propósito— es una situación común, no
+un error de configuración. Rendirse con el primero que se encuentra sería innecesariamente
+estricto: existe una alternativa que ya serviría, a un `tl.which` de distancia.
+
+**Decisión: sí, se busca.** Orden: `python3` primero (si ya sirve, cero sorpresas, cero
+búsqueda), luego `python3.<minor>` ascendente desde el mínimo requerido, hasta diez minors por
+delante (margen generoso sobre casi una década de releases de Python a su cadencia histórica de
+~1/año, sin búsqueda no acotada). El intérprete elegido se nombra en el log, incluida la
+advertencia de que `python3` no alcanzaba cuando aplica — nunca una elección silenciosa.
+
+**Por qué esto no es el `auto` que §4.2 descarta, aunque se parezca:** `executionMode: auto`
+cambiaría qué corre (contenedor vs. paquete, con sus propias versiones de gitleaks/trivy/checkov)
+de forma invisible para el mismo pipeline. Qué intérprete de Python arranca el venv no cambia
+nada de eso: es plomería de arranque, no una decisión que afecte qué se escanea, con qué versión
+de linceo, ni qué veredicto produce `doctor` después. La búsqueda tampoco amplía qué se acepta
+como válido —cada candidato se mide contra el mismo mínimo exacto que `pythonVersionSatisfies`
+ya exige—, sólo amplía dónde se busca un candidato que ya cumple esa única barra.
+
+**Alternativas descartadas:**
+
+| Alternativa | Motivo del descarte |
+|---|---|
+| Fallar con el primer `python3` insuficiente, sin buscar más | Innecesariamente estricto en el caso real que motivó este hallazgo — un `python3.12` ya instalado al lado se queda sin usar por no tener un nombre que la tarea reconociera. |
+| Input nuevo para que el usuario indique la ruta del intérprete | Añade un input para un problema que `tl.which` ya resuelve solo en el caso común; se deja como escape hatch futuro si alguna vez hace falta un intérprete en una ruta no convencional. |
+| Buscar cualquier nombre de binario que empiece por "python" | Encontraría intérpretes Python 2, o binarios no relacionados; la convención `python3.<minor>` es la que `pyenv`, las distros y las PPAs de Python ya usan, y es la única que relaciona el nombre con una versión sin tener que ejecutar el binario primero. |
+
+#### Consecuencia operativa
+
+El fichero `tasks/linceo-scan/linceo-pins.json` se documenta en el README junto al resto de
+inputs de modo `pypi`, con la misma frase que ya usa el resto del documento para una limitación
+de plataforma aceptada, no un pendiente: **Python 3.11+ en el agente es un requisito del modo
+`pypi`, con `executionMode: container` como alternativa donde no esté disponible.**
 
 ---

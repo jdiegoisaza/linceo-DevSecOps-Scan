@@ -2,6 +2,17 @@ import path = require('path');
 import fs = require('fs');
 import tl = require('azure-pipelines-task-lib/task');
 
+// Copiado literalmente de pyproject.toml de linceo (ver linceo-pins.json)
+// — el mínimo de Python que el modo pypi necesita para instalarlo no es
+// un dato que esta tarea decida, es un hecho sobre linceo. Igual que
+// tasks/linceo-install/tool-pins.json, se vendoriza y se vigila con la
+// misma comprobación de deriva programada (azure-pipelines-linceo-pins-
+// check.yml) — nunca se recalcula ni se adivina aquí.
+interface LinceoPins {
+    python: { requires: string };
+}
+const LINCEO_PINS: LinceoPins = JSON.parse(fs.readFileSync(path.join(__dirname, 'linceo-pins.json'), 'utf8'));
+
 // Repositorio de la imagen; el tag es un input (imageTag) — quien usa la
 // extensión puede fijar su propia versión sin esperar a un release de la
 // extensión. El valor por defecto en task.json es la versión que esta
@@ -286,6 +297,113 @@ function resolveSystemAccessToken(useSystemAccessToken: boolean): boolean {
     return false;
 }
 
+type PythonVersion = [number, number, number];
+
+/**
+ * Corre `<pythonPath> -c "..."` para leer sys.version_info directamente
+ * del intérprete — no se parsea el texto de `python3 --version` (formato
+ * menos estable entre distribuciones/locales) cuando el propio intérprete
+ * puede decirlo sin ambigüedad.
+ */
+function detectPythonVersion(pythonPath: string): PythonVersion {
+    const result = tl
+        .tool(pythonPath)
+        .arg(['-c', 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}")'])
+        .execSync();
+    if (result.code !== 0) {
+        throw new Error(`No se pudo determinar la versión de "${pythonPath}" (código ${result.code}): ${result.stderr.trim()}`);
+    }
+    const parts = result.stdout.trim().split('.').map(Number);
+    if (parts.length !== 3 || parts.some(n => Number.isNaN(n))) {
+        throw new Error(`Salida inesperada al leer la versión de "${pythonPath}": "${result.stdout.trim()}"`);
+    }
+    return [parts[0], parts[1], parts[2]];
+}
+
+/**
+ * Compara una versión detectada contra un requisito mínimo simple
+ * "`>=`X.Y" — el único operador que requires-python de linceo usa hoy.
+ * Deliberadamente no un parser PEP 440 completo: mismo criterio de
+ * minimalismo que linceo aplica en su propio core/version_range.py para
+ * no traer esa complejidad por una necesidad igual de acotada.
+ */
+function pythonVersionSatisfies(version: PythonVersion, requires: string): boolean {
+    const match = requires.trim().match(/^>=(\d+)\.(\d+)(?:\.(\d+))?$/);
+    if (!match) {
+        throw new Error(`No se pudo interpretar el requisito de versión de Python "${requires}" (se esperaba algo como ">=3.11").`);
+    }
+    const required: PythonVersion = [Number(match[1]), Number(match[2]), Number(match[3] ?? '0')];
+    for (let i = 0; i < 3; i++) {
+        if (version[i] !== required[i]) {
+            return version[i] > required[i];
+        }
+    }
+    return true;
+}
+
+/**
+ * Busca un intérprete de Python que cumpla el mínimo que linceo declara
+ * en su propio pyproject.toml (vendorizado en linceo-pins.json). Sin
+ * esto, un agente con "python3" apuntando a un Python viejo (p. ej. el
+ * 3.8 de sistema de muchas imágenes Ubuntu LTS) falla en pip con
+ * "Could not find a version that satisfies the requirement ... (from
+ * versions: none)" — un mensaje que no nombra la causa real
+ * (requires-python no cumplido) y que nadie va a deducir sin leer el
+ * código de linceo.
+ *
+ * No se rinde con el primer "python3" que encuentra: en un agente con
+ * varios intérpretes instalados uno junto a otro (python3 -> 3.8 del
+ * sistema, python3.12 instalado aparte para otro propósito) rendirse ahí
+ * sería innecesariamente estricto — nadie configuró mal nada, sólo hay
+ * más de un intérprete, y uno de ellos ya sirve. Es una búsqueda segura
+ * de hacer: a diferencia de executionMode (que si cambia, cambia el
+ * resultado del escaneo, ADR §4.2), qué Python arranca el venv es un
+ * detalle de plomería que no toca qué versión de linceo/gitleaks/trivy/
+ * checkov corre después — doctor sigue validando eso igual.
+ *
+ * Orden: "python3" primero (el caso común; si ya sirve, cero sorpresas),
+ * luego "python3.<minor>" ascendente desde el mínimo requerido. Nunca
+ * prueba una versión por debajo del mínimo, nunca un nombre arbitrario
+ * fuera de esta convención. El intérprete elegido se nombra en el log,
+ * nunca en silencio.
+ */
+function resolvePythonInterpreter(pythonRequires: string): { path: string; version: PythonVersion } {
+    const match = pythonRequires.trim().match(/^>=(\d+)\.(\d+)/);
+    if (!match) {
+        throw new Error(`No se pudo interpretar el requisito de versión de Python "${pythonRequires}" (se esperaba algo como ">=3.11").`);
+    }
+    const [minMajor, minMinor] = [Number(match[1]), Number(match[2])];
+    const candidateNames = ['python3', ...Array.from({ length: 10 }, (_, i) => `python3.${minMinor + i}`)];
+
+    const tried: string[] = [];
+    for (const name of candidateNames) {
+        const candidatePath = tl.which(name, false);
+        if (!candidatePath) {
+            continue;
+        }
+        const version = detectPythonVersion(candidatePath);
+        tried.push(`${name} (${version.join('.')})`);
+        if (pythonVersionSatisfies(version, pythonRequires)) {
+            const viaFallback = name !== 'python3';
+            console.log(
+                `Intérprete de Python elegido para el venv de linceo: "${name}" (${candidatePath}, versión ${version.join('.')}).` +
+                (viaFallback
+                    ? ' "python3" no cumplía el mínimo requerido por linceo; se buscó y encontró una alternativa en el PATH.'
+                    : '')
+            );
+            return { path: candidatePath, version };
+        }
+    }
+
+    const triedSummary = tried.length > 0 ? tried.join(', ') : 'ninguno de esos nombres resolvió en el PATH';
+    throw new Error(
+        `No se encontró en el PATH un intérprete de Python que cumpla el requisito de linceo (${pythonRequires}, ` +
+        'tomado de su propio pyproject.toml — ver tasks/linceo-scan/linceo-pins.json). ' +
+        `Probados: ${triedSummary}. Instala Python ${minMajor}.${minMinor}+ en este agente (basta con que quede ` +
+        'accesible como "python3.X" en el PATH), o usa executionMode: container, que no depende de Python en el agente.'
+    );
+}
+
 /**
  * Modo pypi (ADR-000 §4.5/§12.5): si ya hay un `linceo` resoluble en el
  * PATH del agente, se usa ese y no se instala nada — es lo que hace que
@@ -296,20 +414,25 @@ function resolveSystemAccessToken(useSystemAccessToken: boolean): boolean {
  * persistido entre jobs: a diferencia de gitleaks/trivy/checkov en
  * linceo-install, el propio orquestador es ligero y puro-Python, así que
  * no hay a quién ahorrarle una reinstalación de peso comparable.
+ *
+ * El preflight de versión de Python corre ANTES del venv/pip, por el
+ * mismo criterio que el resto de esta tarea (resolveWorkspacePath,
+ * extraArgs): si algo está mal, falla por esa causa explícita, no por lo
+ * que pip reporte dos pasos después con un mensaje que no la nombra.
  */
-async function ensureLinceoBinary(linceoVersion: string): Promise<string> {
+async function ensureLinceoBinary(linceoVersion: string, pythonRequires: string): Promise<string> {
     const existing = tl.which('linceo', false);
     if (existing) {
         console.log(`linceo ya está en el PATH del agente (${existing}) — se usa ese, no se instala nada.`);
         return existing;
     }
 
-    const pythonPath = tl.which('python3', true);
+    const python = resolvePythonInterpreter(pythonRequires);
     const agentTemp = tl.getVariable('Agent.TempDirectory') ?? '';
     const venvDir = path.join(agentTemp, `linceo-scan-venv-${Date.now()}`);
 
     console.log(`linceo no está en el PATH. Instalando linceo[remote-config]==${linceoVersion} en ${venvDir}.`);
-    await tl.tool(pythonPath).arg(['-m', 'venv', venvDir]).exec();
+    await tl.tool(python.path).arg(['-m', 'venv', venvDir]).exec();
     await tl.tool(path.join(venvDir, 'bin', 'pip')).arg(['install', `linceo[remote-config]==${linceoVersion}`]).exec();
 
     return path.join(venvDir, 'bin', 'linceo');
@@ -478,7 +601,7 @@ async function run(): Promise<void> {
 
             let linceoPath: string;
             try {
-                linceoPath = await ensureLinceoBinary(linceoVersion);
+                linceoPath = await ensureLinceoBinary(linceoVersion, LINCEO_PINS.python.requires);
             } catch (err) {
                 const message = err instanceof Error ? err.message : 'Error desconocido';
                 throw new Error(`LINCEO_MODE_UNAVAILABLE: no se pudo preparar linceo en modo pypi: ${message}`);

@@ -1,0 +1,30 @@
+# Pipeline independiente de azure-pipelines.yml a propósito (ADR-000
+# §12.7/§12.8): compara tasks/linceo-install/tool-pins.json y
+# tasks/linceo-scan/linceo-pins.json contra el release más reciente de
+# linceo — un repositorio ajeno — y es la única razón por la que esta
+# corrida puede fallar. Si viviera dentro de azure-pipelines.yml, cada push
+# a main se pondría en rojo el día que linceo suba una versión, sin que ese
+# push tenga relación alguna con eso — el mismo problema que apuntar a
+# `latest` (§7.1), pero en el repositorio equivocado. Aquí falla sólo esta
+# corrida programada, con su propio motivo claramente etiquetado, sin
+# tocar el semáforo de build/publish.
+#
+# Requiere registrarse como un Pipeline propio en Azure DevOps (New
+# pipeline -> Existing Azure Pipelines YAML file -> esta ruta) — no se
+# ejecuta solo por existir el fichero. Ver README.md.
+trigger: none
+pr: none
+
+schedules:
+  - cron: '0 6 * * *'
+    displayName: 'Chequeo diario de deriva de tool-pins.json / linceo-pins.json'
+    branches:
+      include:
+        - main
+    always: true
+
+pool:
+  name: LocalTest
+
+steps:
+  - template: pipelines/check-linceo-pins.yml

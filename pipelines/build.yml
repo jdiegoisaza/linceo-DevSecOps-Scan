@@ -80,6 +80,7 @@ steps:
       required_files=(
         "tasks/linceo-scan/dist/task.json"
         "tasks/linceo-scan/dist/index.js"
+        "tasks/linceo-scan/dist/linceo-pins.json"
         "tasks/linceo-scan/dist/node_modules/azure-pipelines-task-lib/package.json"
         "tasks/linceo-install/dist/task.json"
         "tasks/linceo-install/dist/index.js"

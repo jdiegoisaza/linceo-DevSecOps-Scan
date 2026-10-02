@@ -1,0 +1,11 @@
+{
+    "_comment": "Copiado literalmente de pyproject.toml de linceo (https://github.com/jdiegoisaza/linceo) — nunca inventado ni recalculado aquí. Actualizar este fichero es un cambio de contrato de esta extensión (igual que tasks/linceo-install/tool-pins.json) y debe acompañarse de un bump de versión. La comprobación de deriva contra el release más reciente corre en azure-pipelines-linceo-pins-check.yml.",
+    "source": {
+        "repository": "https://github.com/jdiegoisaza/linceo",
+        "pyprojectRef": "v0.9.1",
+        "verifiedAt": "2026-10-01"
+    },
+    "python": {
+        "requires": ">=3.11"
+    }
+}

@@ -22,11 +22,13 @@ del CLI de linceo contra la matriz de compatibilidad de esta extensión (`suppor
 
 ```
 tasks/linceo-scan/                tarea Node/TypeScript — ejecuta el escaneo (container o pypi)
+tasks/linceo-scan/linceo-pins.json   mínimo de Python que linceo declara, copiado de su pyproject.toml
 tasks/linceo-install/             tarea Node/TypeScript — prepara gitleaks/trivy/checkov sin Docker
+tasks/linceo-install/tool-pins.json  versiones y checksums de gitleaks/trivy/checkov, copiados del Dockerfile de linceo
 scripts/                          build.js / install.js / package.js, heredados de la plantilla
-scripts/check-tool-pins-drift.js  compara tool-pins.json contra el Dockerfile público de linceo
-pipelines/check-tool-pins.yml     steps template de esa comprobación
-azure-pipelines-tool-pins-check.yml  pipeline programado independiente — ver más abajo
+scripts/check-linceo-pins-drift.js   compara los dos ficheros de pins de arriba contra el release público de linceo
+pipelines/check-linceo-pins.yml   steps template de esa comprobación
+azure-pipelines-linceo-pins-check.yml  pipeline programado independiente — ver más abajo
 static/logo.png                   ícono de la extensión (placeholder — reemplazar antes de publicar)
 vss-extension.json                 manifiesto de la extensión
 ```
@@ -123,6 +125,22 @@ Puntos no obvios:
   no hay caché posible por ningún medio basado en disco, y la tarea simplemente reinstala cada
   vez — mismo costo que no tener la tarea, no una regresión.
 
+### Requisito de Python en modo `pypi`
+
+**El modo `pypi` exige Python 3.11+ en el agente — es una limitación aceptada, no un pendiente.**
+Es el mínimo que el propio linceo declara en su `pyproject.toml` (vendorizado en
+`tasks/linceo-scan/linceo-pins.json`, vigilado por la misma comprobación de deriva que los pines
+de herramientas). Donde el agente no tenga Python 3.11+ disponible, la alternativa es
+`executionMode: container`, que no depende de Python en absoluto.
+
+Si `python3` resuelve a una versión insuficiente pero hay otro intérprete compatible instalado
+aparte (`python3.12`, por ejemplo), la tarea lo encuentra sola: prueba `python3` primero, y si no
+alcanza, busca `python3.<minor>` ascendente desde el mínimo requerido. El intérprete elegido
+queda en el log de la tarea, nunca en silencio. Si ninguno alcanza, la tarea falla nombrando la
+versión encontrada, la mínima requerida y qué hacer — nunca con el
+`Could not find a version that satisfies the requirement ... (from versions: none)` críptico que
+da pip cuando descarta todas las distribuciones por `requires-python`, sin decir por qué.
+
 ```yaml
 steps:
   - task: linceo-install@0
@@ -140,16 +158,18 @@ steps:
       executionMode: pypi
 ```
 
-## Comprobación de deriva de `tool-pins.json`
+## Comprobación de deriva de los pins de linceo
 
-`tasks/linceo-install/tool-pins.json` es una copia manual de valores del Dockerfile de linceo —
-puede quedar desactualizada sin que nada lo note. `azure-pipelines-tool-pins-check.yml` es un
-pipeline **separado** del de build/publish, programado a diario, que resuelve el tag más reciente
-de `github.com/jdiegoisaza/linceo`, descarga su Dockerfile y compara sus `ARG` contra
-`tool-pins.json` — **falla** (no avisa) si difieren (ADR §12.7).
+`tasks/linceo-install/tool-pins.json` (versiones/checksums de gitleaks, trivy y checkov) y
+`tasks/linceo-scan/linceo-pins.json` (mínimo de Python) son copias manuales de valores de linceo
+— pueden quedar desactualizados sin que nada lo note. `azure-pipelines-linceo-pins-check.yml` es
+un pipeline **separado** del de build/publish, programado a diario, que resuelve el tag más
+reciente de `github.com/jdiegoisaza/linceo`, descarga su `Dockerfile` y su `pyproject.toml`, y
+compara ambos contra los dos ficheros de pins — **falla** (no avisa) si algo difiere (ADR
+§12.7/§12.8).
 
 Para activarlo: en Azure DevOps, *Pipelines → New pipeline → Existing Azure Pipelines YAML file*,
-apuntando a `azure-pipelines-tool-pins-check.yml` de este repositorio. No corre solo por existir
+apuntando a `azure-pipelines-linceo-pins-check.yml` de este repositorio. No corre solo por existir
 el fichero — como cualquier otro pipeline de este proyecto, hay que registrarlo una vez.
 
 ## Variables de entorno propagadas al contenedor

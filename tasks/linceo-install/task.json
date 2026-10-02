@@ -7,11 +7,11 @@
     "description": "Instala en el agente, sin Docker, las herramientas que linceo orquesta para las categorías elegidas (gitleaks, trivy, checkov), verificadas contra un checksum publicado. Pensado para usarse junto a linceo-scan en modo pypi.",
     "helpMarkDown": "[Documentación de linceo](https://github.com/jdiegoisaza/linceo) — ver ADR-000 §12 de esta extensión para el diseño completo de esta tarea.",
     "category": "Utility",
-    "author": "your-publisher",
+    "author": "juandiego-13",
     "version": {
         "Major": 0,
         "Minor": 1,
-        "Patch": 0
+        "Patch": 1
     },
     "inputs": [
         {

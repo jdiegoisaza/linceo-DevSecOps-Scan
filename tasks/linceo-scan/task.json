@@ -7,11 +7,11 @@
     "description": "Ejecuta un escaneo de linceo (secrets, sca o iac) usando la imagen de contenedor oficial ghcr.io/jdiegoisaza/linceo.",
     "helpMarkDown": "[Documentación de linceo](https://github.com/jdiegoisaza/linceo)",
     "category": "Utility",
-    "author": "your-publisher",
+    "author": "juandiego-13",
     "version": {
         "Major": 0,
         "Minor": 4,
-        "Patch": 0
+        "Patch": 1
     },
     "inputs": [
         {

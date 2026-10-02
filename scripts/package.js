@@ -83,14 +83,16 @@ function packageTask(taskDir) {
         copyDirectory(pythonDir, path.join(taskDir, "dist", "python"));
     }
 
-    // tool-pins.json (sólo linceo-install): fuente de verdad de versiones
-    // y checksums, leída en runtime por dist/index.js (fs.readFileSync
-    // relativo a __dirname) — tiene que viajar junto al resto del dist,
-    // igual que task.json/icon.png, o la tarea no la encuentra empaquetada.
-    const toolPinsFile = path.join(taskDir, "tool-pins.json");
-    if (fs.existsSync(toolPinsFile)) {
-        copySources(taskDir, "tool-pins.json");
-    }
+    // *-pins.json (tool-pins.json en linceo-install, linceo-pins.json en
+    // linceo-scan): valores copiados de linceo, leídos en runtime por
+    // dist/index.js (fs.readFileSync relativo a __dirname) — tienen que
+    // viajar junto al resto del dist, igual que task.json/icon.png, o la
+    // tarea no los encuentra empaquetados. Por patrón de nombre, no por
+    // una lista fija de ficheros: cada tarea trae los pins que necesita,
+    // sin que este script tenga que conocer sus nombres exactos.
+    fs.readdirSync(taskDir)
+        .filter(name => name.endsWith("-pins.json"))
+        .forEach(name => copySources(taskDir, name));
 
     let taskPackage = path.join(taskDir, "dist");
     execNpm('i', taskPackage);
